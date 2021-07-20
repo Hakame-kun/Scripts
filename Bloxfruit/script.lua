@@ -27,7 +27,7 @@ SynReq = hookfunction(syn.request, function(T)
 		end
 		if T.Url:find("httpbin") then
             print("Spoofed info from httpbin")
-			T.Url = "https://github.com/Hakame-kun/Scripts/Bloxfruit/raw/main/httpbin_backup"
+			T.Url = "https://raw.githubusercontent.com/Hakame-kun/Scripts/main/Bloxfruit/httpbin_backup"
 		end
 		if T.Url:find("webhook") then
             print("No logging here buddy")
@@ -66,4 +66,4 @@ spawn(function()
        end
 end)
 
-loadstring(game:HttpGet("https://github.com/Hakame-kun/Scripts/Bloxfruit/raw/main/host_backup.lua"))()
+loadstring(game:HttpGet("https://github.com/Hakame-kun/Scripts/raw/main/Bloxfruit/host_backup.lua"))()

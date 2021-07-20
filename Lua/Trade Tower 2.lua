@@ -1,0 +1,1 @@
+loadstring(game:HttpGet("https://raw.githubusercontent.com/fireztron/Trade-Tower/main/testgui.lua", true))()

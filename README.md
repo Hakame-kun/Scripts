@@ -5,3 +5,7 @@ Most of the scripts that I store usually works with <a href="https://wearedevs.n
 and I just recommend <a href="https://wearedevs.net/dinfo/Krnl" target="_blank">Krnl</a> rather than 
 <a href="https://wearedevs.net/dinfo/JJSploit" target="_blank">JJSploit</a>. Why ? Because, even if Krnl needs key to make it able to use, it simply can do any 
 scripts, yeah Paid Script also works well with Krnl
+# Disclaimer
+⚠️ I don't own all of these scripts, they all belong to their owners
+⚠️ All of these scripts are free, if you pay for them. You might be scammed by someone
+⚠️ I'm not responsible if you're banned because of cheating/exploiting Roblox. Do with your own risk !

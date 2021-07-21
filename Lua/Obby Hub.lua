@@ -1,4 +1,4 @@
-loadstring(game:HttpGet("https://pastebin.com/raw/Nv89Cn5d", true))()
+loadstring(game:HttpGet("https://github.com/Hakame-kun/Scripts/raw/main/Obby%20Hub/Obby%20Hub.lua", true))()
 
 -- Features:
 -- Escape The Dungeon Obby

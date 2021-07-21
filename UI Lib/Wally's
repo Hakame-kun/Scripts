@@ -1,0 +1,49 @@
+--[[
+	Window Library // Documentation
+	
+	Library [
+		Method -> library:CreateWindow(<table> options)
+		
+		Currently the options are:
+		title - string - title of the window
+		barcolor - Color3 - color of the topbar;
+		txtcolor - Color3 - color of the text (buttons, etc)
+		bartextcolor - Color3 - color of the topbar text
+		underline - Color3 - color of the underline object
+		bgcolor - Color3 - color of the background object
+
+		returns: <class> window
+	]
+
+	Window [
+		[!] if no callback is defined a blank one will be provided for you
+		Method -> window:AddBox(<string> text, <function> callback)
+			@text -> placeholder text of the object;
+			@callback(<object> box, <bool> enterpressed) -> called when textbox loses focus
+
+			returns: <object> box
+
+		Method -> window:AddToggle(<string> text, <function> callback)
+			@text -> text for the toggle
+			@callback(<bool> state) --> called when the toggle is flipped (button is clicked)
+	
+			returns: <object> button
+
+		Method - window:AddButton(<string> text, <function> callback)
+			@text -> text for the button
+			@callback() --> called when the toggle is flipped (button is clicked)
+
+			returns: <object> button
+
+		Method - window:AddLabel(<string>text)
+			@text -> text for the label
+
+			returns <object> label
+
+		Method - window:AddDropdown(<array> options, <function> callback)
+			@options -> options for dropdown (first option will be the default)
+			@callback(<string> selected) -> selected when new value is selected
+
+			returns <object> dropdown
+	]
+]]

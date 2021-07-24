@@ -1,4 +1,4 @@
-local library = loadstring(game:HttpGet("https://github.com/Hakame-kun/Scripts/raw/main/UI%20Lib/Wally's", true))()
+local library = loadstring(game:HttpGet("https://gist.github.com/Hakame-kun/111a815c21b0d4d651803b598d3d1b56/raw/1d051d1706fcee8fc48a2e55711b615edd9cb52f/Wally's%2520UI", true))()
 library.options.underlinecolor = "rainbow"
 
 local w = library:CreateWindow('Main')

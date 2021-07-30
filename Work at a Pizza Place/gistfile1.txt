@@ -528,7 +528,6 @@ while gui.Parent do
 		if c then
 			local dialog = c.Head.Dialog.Correct.ResponseDialog or ''
 			local rootMoved = false
-			if (root.Position-Vector3.new(46.34, 3.80, 82.02)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(46.34, 3.80, 82.02) wait(.1) end
 			local order = "MountainDew"
 			if dialog:sub(-8)=="instead." then
 				dialog = dialog:sub(-30)
@@ -568,7 +567,6 @@ while gui.Parent do
 			local oven = getOvenNear(cookP.Position)
 			if oven==nil or oven.IsOpen.Value then
 				cookPtick=tick()
-				if (root.Position-Vector3.new(44.63, 6.60, 45.20)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(44.63, 6.60, 45.20) wait(.1) end
 				network:FireServer("UpdateProperty", cookP, "CFrame", CFrame.new(56,4.1,38))
 			end
 		end
@@ -576,12 +574,10 @@ while gui.Parent do
 			if order=="Dew" and cookD and tick()-cookDtick>0.8 then
 				--move dew if ordered
 				cookDtick=tick()
-				if (root.Position-Vector3.new(44.63, 6.60, 45.20)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(44.63, 6.60, 45.20) wait(.1) end
 				network:FireServer("UpdateProperty", cookD, "CFrame", CFrame.new(53,4.68,36.5))
 			elseif order~="Dew" and raw and raw.Parent and supplyCounts[order]>0 and supplyCounts.TomatoSauce>0 and supplyCounts.Cheese>0 then
 				--make pizza
 				if raw.Mesh.Scale.Y>1.5 then
-					if (root.Position-Vector3.new(44.63, 6.60, 45.20)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(44.63, 6.60, 45.20) wait(.1) end
 					network:FireServer("UpdateProperty", raw, "CFrame", CFrame.new(RNG:NextNumber(29.6,44.6),3.7,RNG:NextNumber(42.5,48.5)))
 					wait()
 					network:FireServer("SquishDough", raw)
@@ -594,7 +590,6 @@ while gui.Parent do
 							if other==nil or not (other.BrickColor.Name=="Bright orange" and ffc(other.SG.Frame,"TomatoSauce") and ffc(other.SG.Frame,"MeltedCheese")) then
 								if other then
 									--replace mistaken dough
-									if (root.Position-Vector3.new(44.63, 6.60, 45.20)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(44.63, 6.60, 45.20) wait(.1) end
 									network:FireServer("UpdateProperty", other, "CFrame", CFrame.new(RNG:NextNumber(29.6,44.6),3.7,RNG:NextNumber(42.5,48.5)))
 									wait()
 								end
@@ -605,7 +600,6 @@ while gui.Parent do
 					end
 					if oven and raw.Parent==workspace.AllDough then
 						--make
-						if (root.Position-Vector3.new(44.63, 6.60, 45.20)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(44.63, 6.60, 45.20) wait(.1) end
 						network:FireServer("AddIngredientToPizza", raw,"TomatoSauce")
 						network:FireServer("AddIngredientToPizza", raw,"Cheese")
 						network:FireServer("AddIngredientToPizza", raw,topping)
@@ -635,7 +629,6 @@ while gui.Parent do
 		for _,o in ipairs(ovens) do
 			local bar = o.Door.Meter.SurfaceGui.ProgressBar.Bar
 			if o.IsOpen.Value==false and (o.IsCooking.Value==false or (Vector3.new(bar.ImageColor3.r,bar.ImageColor3.g,bar.ImageColor3.b)-Vector3.new(.871,.518,.224)).magnitude>.1) then
-				if (root.Position-Vector3.new(44.63, 6.60, 45.20)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(44.63, 6.60, 45.20) wait(.1) end
 				o.Door.ClickDetector.Detector:FireServer()
 				break
 			end
@@ -643,7 +636,6 @@ while gui.Parent do
 		--trash
 		if trash and (trash.IsBurned.Value==false or getOvenNear(trash.Position)==nil or getOvenNear(trash.Position).IsOpen.Value) then
 			--closed oven breaks if you take burnt out of it
-			if (root.Position-Vector3.new(44.63, 6.60, 45.20)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(44.63, 6.60, 45.20) wait(.1) end
 			network:FireServer("UpdateProperty", trash, "CFrame", CFrame.new(47.9,RNG:NextNumber(-10,-30),72.5))
 		end
 		if rootMoved then wait(.1) end
@@ -654,28 +646,23 @@ while gui.Parent do
 		local rootMoved = false
 		if boxD and tick()-boxDtick>0.8 then
 			boxDtick=tick()
-			if (root.Position-Vector3.new(54.09, 3.80, 23.150)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(54.09, 3.80, 23.15) wait(.1) end
 			network:FireServer("UpdateProperty", boxD, "CFrame", CFrame.new(63,4.9,-1,-1,0,0,0,1,0,0,0,-1))
 		end
 		if fullBox then
 			if fullBox.Name=="BoxOpen" then
-				if (root.Position-Vector3.new(54.09, 3.80, 23.150)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(54.09, 3.80, 23.15) wait(.1) end
 				network:FireServer("CloseBox", fullBox)
 				--will be moved next loop
 			elseif tick()-boxPtick>0.8 then
-				if (root.Position-Vector3.new(54.09, 3.80, 23.150)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(54.09, 3.80, 23.15) wait(.1) end
 				network:FireServer("UpdateProperty", fullBox, "CFrame", CFrame.new(68.2,4.4,-1,-1,0,0,0,1,0,0,0,-1))
 				boxPtick=tick()
 			end
 		end
 		if closedBox and not openBox then
-			if (root.Position-Vector3.new(54.09, 3.80, 23.150)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(54.09, 3.80, 23.15) wait(.1) end
 			network:FireServer("UpdateProperty", closedBox, "CFrame", CFrame.new(RNG:NextNumber(62.5,70.5),3.5,RNG:NextNumber(11,25)))
 			wait()
 			network:FireServer("OpenBox", closedBox)
 		end
 		if openBox and boxP then
-			if (root.Position-Vector3.new(54.09, 3.80, 23.150)).magnitude>9 then rootMoved = true root.CFrame = CFrame.new(54.09, 3.80, 23.15) wait(.1) end
 			network:FireServer("UpdateProperty", boxP, "Anchored", true)
 			network:FireServer("UpdateProperty", openBox, "Anchored", true)
 			wait()

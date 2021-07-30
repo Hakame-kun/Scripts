@@ -1,7 +1,3 @@
--- Anti AFK
-for i,v in pairs(getconnections(game:GetService("Players").LocalPlayer.Idled)) do
-v:Disable()
-
 local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/miroeramaa/TurtleLib/main/TurtleUiLib.lua"))()
 local window1 = library:Window("Scripts")
 local window2 = library:Window("LocalPlayer")

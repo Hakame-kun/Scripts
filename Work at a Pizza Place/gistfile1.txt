@@ -579,7 +579,7 @@ while gui.Parent do
 				--make pizza
 				if raw.Mesh.Scale.Y>1.5 then
 					network:FireServer("UpdateProperty", raw, "CFrame", CFrame.new(RNG:NextNumber(29.6,44.6),3.7,RNG:NextNumber(42.5,48.5)))
-					wait(0.075)
+					wait(0.08)
 					network:FireServer("SquishDough", raw)
 				else
 					--make sure it will have an oven
@@ -591,7 +591,7 @@ while gui.Parent do
 								if other then
 									--replace mistaken dough
 									network:FireServer("UpdateProperty", other, "CFrame", CFrame.new(RNG:NextNumber(29.6,44.6),3.7,RNG:NextNumber(42.5,48.5)))
-									wait(0.075)
+									wait(0.08)
 								end
 								oven=o
 								break
@@ -638,7 +638,7 @@ while gui.Parent do
 			--closed oven breaks if you take burnt out of it
 			network:FireServer("UpdateProperty", trash, "CFrame", CFrame.new(47.9,RNG:NextNumber(-10,-30),72.5))
 		end
-		if rootMoved then wait(0.125) end
+		if rootMoved then wait(0.14) end
 	end
 	if doBoxer then
 		local boxP,boxD = FindBoxingFoods()
@@ -710,14 +710,14 @@ while gui.Parent do
 				if fulfilled then
 					break
 				end
-				wait(0.65)
+				wait(0.3)
 				--check if can finish waiting for boxes to move
 				if waiting and (lastBox.Position.X>42 or tick()-waitingTick>5) then
 					waiting=false
 					if lastBox.Position.X<42 then
 						--clear boxes if stuck
 						root.CFrame=CFrame.new(20.5,8,-35)
-						wait(0.15)
+						wait(0.1)
 						local boxes = workspace.AllSupplyBoxes:GetChildren()
 						for i=1,#boxes do
 							local box = boxes[i]
@@ -732,7 +732,7 @@ while gui.Parent do
 				if not waiting then
 					--move boxes
 					root.CFrame=CFrame.new(8,12.4,-1020)
-					wait(0.15)
+					wait(0.1)
 					alt=1-alt
 					lastBox=nil
 					local j=0
@@ -766,7 +766,7 @@ while gui.Parent do
 			end
 			delTool.Handle.CanCollide=false
 			delTool.Handle.CFrame = root.CFrame
-			wait(0.75)
+			wait(0.55)
 			delay(6,forgetDeliveryTool)
 		elseif delTool and delTool.Parent==character and delTouched==false then
 			--deliver to house

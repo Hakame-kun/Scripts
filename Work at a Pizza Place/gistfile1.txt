@@ -579,7 +579,7 @@ while gui.Parent do
 				--make pizza
 				if raw.Mesh.Scale.Y>1.5 then
 					network:FireServer("UpdateProperty", raw, "CFrame", CFrame.new(RNG:NextNumber(29.6,44.6),3.7,RNG:NextNumber(42.5,48.5)))
-					wait(0.1)
+					wait(0.075)
 					network:FireServer("SquishDough", raw)
 				else
 					--make sure it will have an oven
@@ -591,7 +591,7 @@ while gui.Parent do
 								if other then
 									--replace mistaken dough
 									network:FireServer("UpdateProperty", other, "CFrame", CFrame.new(RNG:NextNumber(29.6,44.6),3.7,RNG:NextNumber(42.5,48.5)))
-									wait(0.1)
+									wait(0.075)
 								end
 								oven=o
 								break
@@ -609,7 +609,7 @@ while gui.Parent do
 						cookingDict[order]=cookingDict[order]+1
 						local revoked=false
 						spawn(function()
-							raw.AncestryChanged:Wait(0.1)
+							raw.AncestryChanged:Wait(0.075)
 							if not revoked then
 								cookingDict[order]=cookingDict[order]-1
 								revoked=true
@@ -638,7 +638,7 @@ while gui.Parent do
 			--closed oven breaks if you take burnt out of it
 			network:FireServer("UpdateProperty", trash, "CFrame", CFrame.new(47.9,RNG:NextNumber(-10,-30),72.5))
 		end
-		if rootMoved then wait(0.15) end
+		if rootMoved then wait(0.125) end
 	end
 	if doBoxer then
 		local boxP,boxD = FindBoxingFoods()

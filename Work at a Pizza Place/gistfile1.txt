@@ -520,7 +520,7 @@ local function simTouch(part)
 end
 --//main loop
 while gui.Parent do
-	wait(0.25)
+	wait(0.35)
 	local hum = character:FindFirstChild("Humanoid")
 	if hum and hum.Sit then hum.Jump = true end
 	if doCashier then
@@ -766,7 +766,7 @@ while gui.Parent do
 			end
 			delTool.Handle.CanCollide=false
 			delTool.Handle.CFrame = root.CFrame
-			wait(0.65)
+			wait(0.75)
 			delay(6,forgetDeliveryTool)
 		elseif delTool and delTool.Parent==character and delTouched==false then
 			--deliver to house
@@ -774,7 +774,7 @@ while gui.Parent do
 			if housePart then
 				delTouched=true
 				root.CFrame = housePart.CFrame+Vector3.new(0,9,0)
-				wait(0.25)
+				wait(0.15)
 			end
 		end
 	end

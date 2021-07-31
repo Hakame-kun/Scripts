@@ -541,7 +541,7 @@ while gui.Parent do
 			end
 			
 			network:FireServer("OrderComplete", c, order, workspace.Register3)
-			if rootMoved then wait(.15) end
+			if rootMoved then wait(0.15) end
 		end
 	end
 	if doCook then
@@ -638,7 +638,7 @@ while gui.Parent do
 			--closed oven breaks if you take burnt out of it
 			network:FireServer("UpdateProperty", trash, "CFrame", CFrame.new(47.9,RNG:NextNumber(-10,-30),72.5))
 		end
-		if rootMoved then wait(.15) end
+		if rootMoved then wait(0.15) end
 	end
 	if doBoxer then
 		local boxP,boxD = FindBoxingFoods()
@@ -670,7 +670,7 @@ while gui.Parent do
 			wait()
 			network:FireServer("AssignPizzaToBox", openBox, boxP)
 		end
-		if rootMoved then wait(.15) end
+		if rootMoved then wait(0.15) end
 	end
 	if doSupplier then
 		local refill=false
@@ -710,7 +710,7 @@ while gui.Parent do
 				if fulfilled then
 					break
 				end
-				wait(.75)
+				wait(0.75)
 				--check if can finish waiting for boxes to move
 				if waiting and (lastBox.Position.X>42 or tick()-waitingTick>5) then
 					waiting=false

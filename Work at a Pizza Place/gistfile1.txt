@@ -717,7 +717,7 @@ while gui.Parent do
 					if lastBox.Position.X<42 then
 						--clear boxes if stuck
 						root.CFrame=CFrame.new(20.5,8,-35)
-						wait(0.1)
+						wait(0.15)
 						local boxes = workspace.AllSupplyBoxes:GetChildren()
 						for i=1,#boxes do
 							local box = boxes[i]

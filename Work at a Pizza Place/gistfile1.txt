@@ -469,7 +469,6 @@ end
 --//main loop
 while gui.Parent do
 	wait(0.35)
-	local hum = character:FindFirstChild("Humanoid")
 	if doCashier then
 		local c = FindFirstCustomer()
 		if c then

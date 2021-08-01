@@ -59,28 +59,6 @@ do
 			network = f
 		end
 	end
-	local mt=getrawmetatable(game)
-	if setreadonly then
-		setreadonly(mt,false)
-	elseif make_writeable then
-		make_writeable(mt)
-	end
-	local old__newindex=mt.__newindex
-	if newcclosure then
-		mt.__newindex=newcclosure(function(t,k,v)
-			if t~=workspace.CurrentCamera or tostring(getfenv(2).script)~="LocalMain" then
-				return old__newindex(t,k,v)
-			end
-		end)
-	else
-		mt.__newindex=function(t,k,v)
-			if t~=workspace.CurrentCamera or tostring(getfenv(2).script)~="LocalMain" then
-				return old__newindex(t,k,v)
-			end
-		end
-	end
-	workspace.Main.RealignCamera.RealignCamera:Destroy()
-	Instance.new("BindableEvent",workspace.Main.RealignCamera).Name="RealignCamera"
 end
 assert(network,"failed to find network")
 --//gui
@@ -268,36 +246,6 @@ saveBtn.MouseButton1Click:Connect(function()
 		messageLbl.Visible=true
 		wait(2)
 		messageLbl.Visible=false
-	end
-end)
-local cameraArray = {CFrame.new(23,14,65,0.629,0.386,-0.674,-0,0.867,0.497,0.777,-0.313,0.545),CFrame.new(39,15,83,-0.571,0.392,-0.720,-0,0.878,0.478,0.820,0.273,-0.502),CFrame.new(40,20,-38,-0.801,-0.229,0.552,-0,0.923,0.384,-0.598,0.307,-0.739),CFrame.new(51,15,-25,-0.707,0.338,-0.620,0,0.878,0.478,0.707,0.338,-0.620),CFrame.new(47,12,21,0.026,0.323,-0.945,-0,0.946,0.323,0.999,-0.008,0.024)}
-local cameraIndex = 0
-centerCamBtn.MouseButton1Click:Connect(function()
-	cameraIndex = 0
-	workspace.CurrentCamera.CameraType = "Custom"
-end)
-leftCamBtn.MouseButton1Click:Connect(function()
-	cameraIndex = cameraIndex - 1
-	if cameraIndex < 0 then
-		cameraIndex = #cameraArray
-	end
-	if cameraIndex == 0 then
-		workspace.CurrentCamera.CameraType="Custom"
-	else
-		local cf = cameraArray[cameraIndex]
-		workspace.CurrentCamera.CameraType="Scriptable"
-		workspace.CurrentCamera:Interpolate(cf,cf+cf.lookVector*10,0.5)
-	end
-end)
-rightCamBtn.MouseButton1Click:Connect(function()
-	cameraIndex = cameraIndex + 1
-	if cameraIndex > #cameraArray then
-		cameraIndex = 0
-		workspace.CurrentCamera.CameraType="Custom"
-	else
-		local cf = cameraArray[cameraIndex]
-		workspace.CurrentCamera.CameraType="Scriptable"
-		workspace.CurrentCamera:Interpolate(cf,cf+cf.lookVector*10,0.5)
 	end
 end)
 

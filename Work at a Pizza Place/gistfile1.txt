@@ -658,14 +658,14 @@ while gui.Parent do
 				if fulfilled then
 					break
 				end
-				wait(0.3)
+				wait(0.25)
 				--check if can finish waiting for boxes to move
 				if waiting and (lastBox.Position.X>42 or tick()-waitingTick>5) then
 					waiting=false
 					if lastBox.Position.X<42 then
 						--clear boxes if stuck
 						root.CFrame=CFrame.new(20.5,8,-35)
-						wait(0.15)
+						wait(0.1)
 						local boxes = workspace.AllSupplyBoxes:GetChildren()
 						for i=1,#boxes do
 							local box = boxes[i]
@@ -714,7 +714,7 @@ while gui.Parent do
 			end
 			delTool.Handle.CanCollide=false
 			delTool.Handle.CFrame = root.CFrame
-			wait(0.55)
+			wait(0.8)
 			delay(6,forgetDeliveryTool)
 		elseif delTool and delTool.Parent==character and delTouched==false then
 			--deliver to house
@@ -722,7 +722,7 @@ while gui.Parent do
 			if housePart then
 				delTouched=true
 				root.CFrame = housePart.CFrame+Vector3.new(0,9,0)
-				wait(0.15)
+				wait(0.2)
 			end
 		end
 	end

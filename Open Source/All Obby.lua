@@ -107,11 +107,43 @@ end)
 w:Section('Press Q to Toggle Noclip')
 
 local b = w:Button("Fly", function()
-    
+local speed = 50 -- This is the fly speed. Change it to whatever you like. The variable can be changed while running
+ 
+local c
+local h
+local bv
+local bav
+local cam
+local flying
+local p = game.Players.LocalPlayer
+local buttons = {W = false, S = false, A = false, D = false, Moving = false}
+ 
+local startFly = function () -- Call this function to begin flying 
+	if not p.Character or not p.Character.Head or flying then return end
+	c = p.Character
+	h = c.Humanoid
+	h.PlatformStand = true
+	cam = workspace:WaitForChild('Camera')
+	bv = Instance.new("BodyVelocity")
+	bav = Instance.new("BodyAngularVelocity")
+	bv.Velocity, bv.MaxForce, bv.P = Vector3.new(0, 0, 0), Vector3.new(10000, 10000, 10000), 1000
+	bav.AngularVelocity, bav.MaxTorque, bav.P = Vector3.new(0, 0, 0), Vector3.new(10000, 10000, 10000), 1000
+	bv.Parent = c.Head
+	bav.Parent = c.Head
+	flying = true
+	h.Died:connect(function() flying = false end)
+end    
 end)
 
-w:Section('It is not available for now')
-
+local b = w:Button("Stop Fly", function()
+local endFly = function () -- Call this function to stop flying
+	if not p.Character or not flying then return end
+	h.PlatformStand = false
+	bv:Destroy()
+	bav:Destroy()
+	flying = false
+end
+end)
 
 local b = w:Button("TP", function()
 _G.Key = 't' -- Put ur keyboard key here

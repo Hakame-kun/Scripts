@@ -53,10 +53,10 @@ spawn(
         while wait() do
             if w.flags.Hoops then
                 for i,v in pairs(game:GetService("Workspace").Hoops:GetChildren()) do
-firetouchinterest(v, game:GetService('Players').LocalPlayer.Character.HumanoidRootPart, 0)
-wait()
-firetouchinterest(v, game:GetService('Players').LocalPlayer.Character.HumanoidRootPart, 1)
-end
+				firetouchinterest(v, game:GetService('Players').LocalPlayer.Character.HumanoidRootPart, 0)
+				wait()
+				firetouchinterest(v, game:GetService('Players').LocalPlayer.Character.HumanoidRootPart, 1)
+				end
             end
         end
     end
@@ -329,29 +329,57 @@ w:Section('Maybe your Trails/Pets is full')
 local w = library:CreateWindow('Other')
 w:Section('Misc')
 local b = w:Button("Disable AFK", function()
-for i,v in pairs(getconnections(game:GetService("Players").LocalPlayer.Idled)) do
-v:Disable()
+local GC = getconnections or get_signal_cons
+if GC then
+    for i,v in pairs(GC(game.Players.LocalPlayer.Idled)) do
+        if v["Disable"] then
+            v["Disable"](v)
+        elseif v["Disconnect"] then
+            v["Disconnect"](v)
+        end
+    end
+else
+    print("lol bad exploit")
+    local vu = game:GetService("VirtualUser")
+    game:GetService("Players").LocalPlayer.Idled:connect(function()
+        vu:Button2Down(Vector2.new(0,0),workspace.CurrentCamera.CFrame)
+        wait(1)
+        vu:Button2Up(Vector2.new(0,0),workspace.CurrentCamera.CFrame)
+    end)
 end
 end)
 
 w:Section('Just in Case')
-local Box = w:Box('WalkSpeed', { 
-   flag = "ws";
-   type = 'number';
-}, function(new, old, enter)
-   print(new, old, enter) 
-   game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = tonumber(new) --Sets the walkspeed to the new value you've entered
+local Slider = w:Slider("WalkSpeed",
+    {
+        precise = true, --"false" will give you whole integers, "true" gives you 0.05's 
+        default = 50, --What you want the default value when the script is ran!
+        min = 1, -- The lowest number that you can select as the user
+        max = 99999, --The highest number you can select as the user
+        flag = "Speed" --Again, it's just a variable. In this case: Window.flags.Speed
+    },
+function() --Makes whatever is below happen each time the slider changes it's value
+      game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = tonumber(w.flags.Speed)
 end)
 
 w:Section('Press Enter to activate')
 
-local Box = w:Box('Jump', { 
-   flag = "jp";
-   type = 'number';
-}, function(new, old, enter)
-   print(new, old, enter) 
-   game.Players.LocalPlayer.Character.Humanoid.JumpPower = tonumber(new) --Sets the walkspeed to the new value you've entered
+local Slider = w:Slider("JumpPower",
+    {
+        precise = true, --"false" will give you whole integers, "true" gives you 0.05's 
+        default = 50, --What you want the default value when the script is ran!
+        min = 1, -- The lowest number that you can select as the user
+        max = 1000, --The highest number you can select as the user
+        flag = "Speed" --Again, it's just a variable. In this case: Window.flags.Speed
+    },
+function() --Makes whatever is below happen each time the slider changes it's value
+      game.Players.LocalPlayer.Character.Humanoid.JumpPower = tonumber(w.flags.Speed)
 end)
+
+local b = w:Button("Rejoin the game", function()
+game:GetService("TeleportService"):Teleport(game.PlaceId, game:GetService("Players").LocalPlayer)
+end)
+
 
 w:Section('Right Ctrl to hide')
 w:Section('Made by Me (Mr. Hakame)')

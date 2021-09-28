@@ -6,9 +6,12 @@ and I just recommend <a href="https://wearedevs.net/dinfo/Krnl" target="_blank">
 <a href="https://wearedevs.net/dinfo/JJSploit" target="_blank">JJSploit</a>.<br>
 Why ? Because, even if Krnl needs key to make it able to use, it simply can do any 
 scripts, yeah Paid Script also works well with Krnl.
-# What's Obfuscated Script
-It's a script that made with an obfuscator (to make sure the script won't get patched somehow). It will just work for 
-some executors that can do obfuscated script, like <a href="https://wearedevs.net/dinfo/Krnl" target="_blank">Krnl</a> or above <a href="https://x.synapse.to/" target="_blank">Synapse X (Buy for $20, highly recommended)</a>
+# Obfuscated Script and Open Source Folder
+Obfuscated Script folder is a place where I made a script that used an obfuscator (Obfuscated Script) (to make sure the script won't get patched somehow). It will just work for 
+some executors that can do obfuscated script, like <a href="https://wearedevs.net/dinfo/Krnl" target="_blank">Krnl</a> or above <a href="https://x.synapse.to/" target="_blank">Synapse X (Buy for $20, highly recommended)</a><br><br>
+Open Source folder is a place where I made a script without obfuscator and most will work on any executor, if it doesn't work, try to use another executor. Otherwise you should use <a href="https://wearedevs.net/dinfo/Krnl" target="_blank">Krnl</a> or <a href="https://x.synapse.to/" target="_blank">Synapse X (Buy for $20, highly recommended)</a>. <br>
+<br>
+⚠️ Do not remove the credits inside the script!
 # Disclaimer
 ⚠️ I don't own all of these scripts, they all belong to their owners.<br>
 ⚠️ All of these scripts are free, if you pay for them. You might be scammed by someone.<br>

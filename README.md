@@ -9,7 +9,7 @@ scripts, yeah Paid Script also works well with Krnl.
 # Obfuscated Script and Open Source Folder
 Obfuscated Script folder is a place where I made a script that used an obfuscator (Obfuscated Script) (to make sure the script won't get patched somehow). It will just work for 
 some executors that can do obfuscated script, like <a href="https://wearedevs.net/dinfo/Krnl" target="_blank">Krnl</a> or above <a href="https://x.synapse.to/" target="_blank">Synapse X (Buy for $20, highly recommended)</a><br><br>
-Open Source folder is a place where I made a script without obfuscator and most will work on any executor, if it doesn't work, try to use another executor. Otherwise you should use <a href="https://wearedevs.net/dinfo/Krnl" target="_blank">Krnl</a> or <a href="https://x.synapse.to/" target="_blank">Synapse X (Buy for $20, highly recommended)</a>. <br>
+Open Source folder is a place where I made/compiled a script without obfuscator and most will work on any executor, if it doesn't work, try to use another executor. Otherwise you should use <a href="https://wearedevs.net/dinfo/Krnl" target="_blank">Krnl</a> or <a href="https://x.synapse.to/" target="_blank">Synapse X (Buy for $20, highly recommended)</a>. <br>
 <br>
 ⚠️ Do not remove the credits inside the script!
 # Disclaimer

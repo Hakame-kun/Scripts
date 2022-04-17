@@ -656,29 +656,29 @@ while gui.Parent do
 				if fulfilled then
 					break
 				end
-				wait(0.2)
+				wait(0.25)
 				--check if can finish waiting for boxes to move
 				if waiting and (lastBox.Position.X>42 or tick()-waitingTick>5) then
 					waiting=false
 					if lastBox.Position.X<42 then
 						--clear boxes if stuck
 						root.CFrame=CFrame.new(20.5,8,-35)
-						wait(0.2)
+						wait(0.125)
 						local boxes = workspace.AllSupplyBoxes:GetChildren()
 						for i=1,#boxes do
 							local box = boxes[i]
 							if box.Anchored==false and box.Position.Z>-55 then
 								network:FireServer("UpdateProperty", box, "CFrame", CFrame.new(RNG:NextNumber(0,40),RNG:NextNumber(-10,-30),-70))
-								wait(0.2)
+								wait()
 							end
 						end
-						wait(0.2)
+						wait(0.125)
 					end
 				end
 				if not waiting then
 					--move boxes
 					root.CFrame=CFrame.new(8,12.4,-1020)
-					wait(0.125)
+					wait(0.5)
 					alt=1-alt
 					lastBox=nil
 					local j=0

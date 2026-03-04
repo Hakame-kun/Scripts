@@ -1,0 +1,2785 @@
+-- Universal Roblox Script
+-- ESP (Players/Items/NPCs/HeldItems), Fullbright, Noclip, TP Tool, FPS Boost, Rejoin,
+-- Fly, Vehicle Fly, WalkSpeed, Vehicle Speed, No Recoil
+
+-- ============================================================
+
+-- Services
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
+local Lighting          = game:GetService("Lighting")
+local Workspace         = game:GetService("Workspace")
+local CoreGui           = game:GetService("CoreGui")
+local TeleportService   = game:GetService("TeleportService")
+
+local localPlayer = Players.LocalPlayer
+local camera      = Workspace.CurrentCamera
+
+-- =====================================================================
+-- USER CONFIGURABLE SETTINGS
+-- =====================================================================
+local FLY_SPEED         = 77
+local VEHICLE_FLY_SPEED = 222
+local WALK_SPEED        = 88
+local VEHICLE_SPEED     = 222
+
+-- =====================================================================
+-- GLOBAL CLEANUP REGISTRY
+-- =====================================================================
+if _G.UniversalScript and _G.UniversalScript.cleanup then
+    pcall(_G.UniversalScript.cleanup)
+    _G.UniversalScript = nil
+end
+
+-- =====================================================================
+-- GUI SETUP
+-- =====================================================================
+local guiName     = "UniversalScriptGUI"
+local existingGui = CoreGui:FindFirstChild(guiName)
+    or localPlayer:FindFirstChild(guiName)
+    or localPlayer.PlayerGui:FindFirstChild(guiName)
+if existingGui then existingGui:Destroy() end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name           = guiName
+screenGui.ResetOnSpawn   = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.DisplayOrder   = 1000000
+screenGui.IgnoreGuiInset = true
+if not pcall(function() screenGui.Parent = CoreGui end) then
+    screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
+end
+
+-- =====================================================================
+-- STATE
+-- =====================================================================
+local toggles = {
+    playersESP    = false,
+    itemsESP      = false,
+    npcESP        = false,
+    heldItemsESP  = false,
+    fullbright    = false,
+    noclip        = false,
+    tpTool        = false,
+    fpsBoost      = false,
+    walkspeed     = false,
+    fly           = false,
+    vehiclespeed  = false,
+    vehicleFly    = false,
+    noRecoil      = false,
+}
+
+local ESP_TYPE = {
+    PLAYER    = "player",
+    ITEM      = "item",
+    NPC       = "npc",
+    HELD_ITEM = "helditem",
+}
+
+local espInstances         = {}
+local espTypeConnections   = { players = {}, items = {}, npcs = {}, helditems = {} }
+local playerTrackers       = {}
+local heldItemTrackers     = {}
+local noclipConnections    = {}
+local noclipOriginalStates = setmetatable({}, { __mode = "k" })
+local noclipHeartbeat      = nil
+local originalLightingProperties = nil
+
+local function captureOriginalLighting()
+    if originalLightingProperties then return end
+    originalLightingProperties = {
+        Ambient           = Lighting.Ambient,
+        Brightness        = Lighting.Brightness,
+        ColorShift_Bottom = Lighting.ColorShift_Bottom,
+        ColorShift_Top    = Lighting.ColorShift_Top,
+        FogEnd            = Lighting.FogEnd,
+        FogStart          = Lighting.FogStart,
+        GlobalShadows     = Lighting.GlobalShadows,
+        OutdoorAmbient    = Lighting.OutdoorAmbient,
+        ClockTime         = Lighting.ClockTime,
+    }
+    -- Deprecated props captured safely
+    pcall(function() originalLightingProperties.ShadowSoftness     = Lighting.ShadowSoftness     end)
+    pcall(function() originalLightingProperties.GeographicLatitude = Lighting.GeographicLatitude end)
+end
+
+local function releaseOriginalLighting()
+    if not toggles.fullbright and not toggles.fpsBoost then
+        originalLightingProperties = nil
+    end
+end
+
+local fpsBoostProperties = {}
+local flyConnections     = {}
+
+local flyLinearVelocity      = nil
+local flyAlignOrientation    = nil
+local flyAttachment          = nil
+local flyAttachmentGyro      = nil
+local flyActive              = false
+local flyOrigPlatformStand   = nil  -- saved before we set PlatformStand = true
+
+local vehicleFlyActive        = false
+local currentVehicle          = nil
+local currentVehicleSeat      = nil
+local vehicleFlyConnections   = {}
+local vehicleMonitorConns     = {}
+local vehicleLinearVelocity   = nil
+local vehicleAlignOrientation = nil
+local vehicleAttachment       = nil
+local vehicleAttachmentGyro   = nil
+local vehicleFlyOrigThrottle  = nil   -- seat.ThrottleFloat saved before zeroing
+local vehicleFlyOrigSteer     = nil   -- seat.SteerFloat saved before zeroing
+
+local walkspeedConnections    = {}
+local walkspeedOriginalValues = setmetatable({}, { __mode = "k" })
+local walkspeedHeartbeat      = nil
+
+local vehiclespeedConnections    = {}
+local vehiclespeedLinearVelocity = nil
+local vehiclespeedAttachment     = nil
+local vehiclespeedActive         = false
+local vehiclespeedVehicle        = nil
+local vehiclespeedSeat           = nil
+local vehiclespeedHeartbeat      = nil
+
+-- ── No Recoil / Fast Fire / Fast Reload ──────────────────────────────
+-- noRecoilBound         : true when BindToRenderStep "NR_noRecoil" is active.
+-- noRecoilPrevCF        : camera CFrame at end of last frame (recoil detection).
+-- noRecoilToolConns     : ChildAdded / CharacterAdded watchers for tool/respawn.
+-- noRecoilCharConns     : HumanoidRootPart.ChildAdded watchers to destroy physics
+--                         movers (BodyAngularVelocity, BodyGyro, AngularVelocity)
+--                         that some games add to apply recoil via character physics.
+-- noRecoilSavedValues   : {obj, prop, orig, isAttr?, attrName?} restore list.
+-- noRecoilSpreadTargets : [{obj, prop/attr}] zeroed every frame (bloom grows back).
+-- noRecoilDriftAccum    : running sum of sub-threshold pitch excesses.
+-- noRecoilSensLive      : self-calibrated sensitivity (rad/pixel), updated every
+--                         idle frame from actual camera/mouse ratio so the recoil
+--                         threshold adapts to whatever sensitivity this game uses.
+-- noRecoilCalibSamples  : number of calibration samples collected so far.
+local noRecoilBound         = false
+local noRecoilPrevCF        = nil
+local noRecoilToolConns     = {}
+local noRecoilCharConns     = {}
+local noRecoilSavedValues   = {}
+local noRecoilSpreadTargets = {}
+local noRecoilDriftAccum    = 0
+local noRecoilSensLive      = 0.013   -- initial guess; replaced by calibration
+local noRecoilCalibSamples  = 0
+
+local buttonRefs = {}
+
+local fpsBoostData = {
+    partProps      = setmetatable({}, { __mode = "k" }),
+    decalProps     = setmetatable({}, { __mode = "k" }),
+    effectProps    = setmetatable({}, { __mode = "k" }),
+    lightProps     = setmetatable({}, { __mode = "k" }),
+    particleProps  = setmetatable({}, { __mode = "k" }),
+    descendantConn = nil,
+}
+
+local mainFrame, minimizeButton, restoreButton, closeButton
+local isMinimized      = false
+local guiVisible       = true
+local restoreButtonPos = UDim2.new(0.5, -50, 0.5, -15)
+
+-- =====================================================================
+-- UNDERGROUND RECOVERY
+-- =====================================================================
+local undergroundRecoveryConn = nil
+local RECOVERY_CHECK_INTERVAL = 0.1
+local GROUND_CHECK_DISTANCE   = 1000
+local GROUND_BUFFER           = 3.5
+
+local function isAnySpeedFeatureActive()
+    return flyActive or vehicleFlyActive or vehiclespeedActive or toggles.walkspeed
+end
+
+local function tryRecoverFromUnderground()
+    local char = localPlayer.Character
+    if not char then return end
+    local rootPart = char:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
+    local pos = rootPart.Position
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = { char }
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    local result = workspace:Raycast(pos + Vector3.new(0,1,0), Vector3.new(0,-GROUND_CHECK_DISTANCE,0), rayParams)
+    if result then
+        local groundY = result.Position.Y
+        if pos.Y < groundY - 1 then
+            rootPart.CFrame = CFrame.new(pos.X, groundY + GROUND_BUFFER, pos.Z)
+        end
+    end
+end
+
+local function startUndergroundRecovery()
+    if undergroundRecoveryConn then return end
+    local lastCheck = 0
+    undergroundRecoveryConn = RunService.Heartbeat:Connect(function()
+        if not isAnySpeedFeatureActive() then return end
+        local now = tick()
+        if now - lastCheck < RECOVERY_CHECK_INTERVAL then return end
+        lastCheck = now
+        tryRecoverFromUnderground()
+    end)
+end
+
+local function stopUndergroundRecovery()
+    if undergroundRecoveryConn then
+        undergroundRecoveryConn:Disconnect()
+        undergroundRecoveryConn = nil
+    end
+end
+
+local function syncUndergroundRecovery()
+    if isAnySpeedFeatureActive() then startUndergroundRecovery() else stopUndergroundRecovery() end
+end
+
+-- =====================================================================
+-- PLAYER CHARACTER CACHE
+-- =====================================================================
+local playerCharacters = setmetatable({}, { __mode = "k" })
+
+local function updatePlayerCharacterCache(player)
+    if player.Character then playerCharacters[player.Character] = player end
+end
+
+local function onPlayerAdded(player)
+    if player == localPlayer then return end
+    updatePlayerCharacterCache(player)
+    player.CharacterAdded:Connect(function(char)
+        playerCharacters[char] = player
+    end)
+    player.CharacterRemoving:Connect(function(char)
+        playerCharacters[char] = nil
+    end)
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+    if player ~= localPlayer then onPlayerAdded(player) end
+end
+Players.PlayerAdded:Connect(onPlayerAdded)
+
+local function isPlayerCharacterOrPart(obj)
+    if playerCharacters[obj] then return true end
+    local ancestor = obj.Parent
+    while ancestor and ancestor ~= Workspace do
+        if playerCharacters[ancestor] then return true end
+        ancestor = ancestor.Parent
+    end
+    return false
+end
+
+-- =====================================================================
+-- NAME CLEANING
+-- =====================================================================
+local function cleanItemName(name)
+    return (name:gsub("[%. _][0-9a-zA-Z]+$", ""))
+end
+
+-- =====================================================================
+-- GLOBAL DISTANCE UPDATER
+-- =====================================================================
+local globalDistanceHeartbeat = nil
+local DIST_UPDATE_INTERVAL    = 0.2
+
+local function startGlobalDistanceUpdater()
+    if globalDistanceHeartbeat then return end
+    local lastUpdate = 0
+    globalDistanceHeartbeat = RunService.Heartbeat:Connect(function()
+        local now = tick()
+        if now - lastUpdate < DIST_UPDATE_INTERVAL then return end
+        lastUpdate = now
+        local char = localPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        for _, data in pairs(espInstances) do
+            local pp = data.primaryPart
+            if pp and pp.Parent then
+                if root then
+                    local dist = (root.Position - pp.Position).Magnitude
+                    data.label.Text = string.format("%s\n%.1f studs", data.name, dist)
+                else
+                    data.label.Text = data.name .. "\n?? studs"
+                end
+            end
+        end
+    end)
+end
+
+local function stopGlobalDistanceUpdater()
+    if globalDistanceHeartbeat then
+        globalDistanceHeartbeat:Disconnect()
+        globalDistanceHeartbeat = nil
+    end
+end
+
+-- =====================================================================
+-- TEAM DETECTION
+-- =====================================================================
+-- Checks every known team representation Roblox games use:
+--   1. player.TeamColor (standard Roblox Teams service)
+--   2. player.Team (Team object reference)
+--   3. StringValue / IntValue / NumberValue named "team*" on player
+--   4. Same value types on the character model
+--   5. StringValue / IntValue / NumberValue anywhere deeper in the
+--      character (some games nest team info inside folders/modules)
+-- getPlayerESPColor policy:
+--   • localPlayer has no detectable team → white (free-for-all game)
+--   • confirmed teammate → green
+--   • everyone else → red (includes undetectable enemy teams; safer
+--     to show a teammate as red than miss an enemy)
+-- =====================================================================
+local TEAM_VALUE_TYPES = { "StringValue", "IntValue", "NumberValue" }
+local function isTeamValue(obj)
+    for _, t in ipairs(TEAM_VALUE_TYPES) do
+        if obj:IsA(t) then
+            local lower = obj.Name:lower()
+            -- match "team" anywhere in the name, but not unrelated words
+            if lower:match("team") or lower == "faction" or lower == "side"
+                or lower == "alliance" or lower == "group" then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function getTeamValueOf(plr)
+    -- player instance children
+    for _, obj in ipairs(plr:GetChildren()) do
+        if isTeamValue(obj) then return tostring(obj.Value) end
+    end
+    -- character children (direct)
+    if plr.Character then
+        for _, obj in ipairs(plr.Character:GetChildren()) do
+            if isTeamValue(obj) then return tostring(obj.Value) end
+        end
+        -- character deeper descendants (some games nest in a folder)
+        for _, obj in ipairs(plr.Character:GetDescendants()) do
+            if isTeamValue(obj) then return tostring(obj.Value) end
+        end
+    end
+    return nil
+end
+
+local function playerHasTeam(player)
+    if player.TeamColor ~= BrickColor.new("White") then return true end
+    if player.Team then return true end
+    return getTeamValueOf(player) ~= nil
+end
+
+local function isSameTeam(playerA, playerB)
+    -- 1. Standard TeamColor (most reliable, instant)
+    local whiteBC = BrickColor.new("White")
+    if playerA.TeamColor ~= whiteBC and playerB.TeamColor ~= whiteBC then
+        return playerA.TeamColor == playerB.TeamColor
+    end
+    -- 2. Roblox Team service object
+    if playerA.Team and playerB.Team then
+        return playerA.Team == playerB.Team
+    end
+    -- 3. Mixed: one has TeamColor, other has Team object — compare via TeamColor
+    if playerA.Team and playerB.TeamColor ~= whiteBC then
+        return playerA.Team.TeamColor == playerB.TeamColor
+    end
+    if playerB.Team and playerA.TeamColor ~= whiteBC then
+        return playerB.Team.TeamColor == playerA.TeamColor
+    end
+    -- 4. Custom Value-based team IDs
+    local valA, valB = getTeamValueOf(playerA), getTeamValueOf(playerB)
+    if valA ~= nil and valB ~= nil then return valA == valB end
+    return false
+end
+
+local function getPlayerESPColor(player)
+    if not playerHasTeam(localPlayer) then return Color3.new(1, 1, 1) end
+    if isSameTeam(localPlayer, player) then
+        return Color3.new(0, 1, 0)
+    end
+    return Color3.new(1, 0, 0)
+end
+
+-- =====================================================================
+-- ESP CORE
+-- =====================================================================
+local function destroyESPInstance(inst)
+    local data = espInstances[inst]
+    if not data then return end
+    if data.highlight and data.highlight.Parent then data.highlight:Destroy() end
+    if data.billboard and data.billboard.Parent then data.billboard:Destroy() end
+    if data.connections then
+        for _, conn in ipairs(data.connections) do conn:Disconnect() end
+    end
+    espInstances[inst] = nil
+end
+
+local function createESP(instance, espType, color, name, extraData)
+    if espInstances[instance] then return espInstances[instance].type == espType end
+
+    local primaryPart
+    if instance:IsA("BasePart") then
+        primaryPart = instance
+    elseif instance:IsA("Model") then
+        primaryPart = instance.PrimaryPart or instance:FindFirstChildWhichIsA("BasePart", true)
+    end
+    if not primaryPart then return false end
+
+    local displayName = cleanItemName(name)
+
+    local highlight = Instance.new("Highlight")
+    highlight.Adornee             = instance
+    highlight.FillColor           = color
+    highlight.OutlineColor        = color
+    highlight.FillTransparency    = 0.5
+    highlight.OutlineTransparency = 0
+    highlight.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
+    highlight.Parent              = instance
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Adornee     = primaryPart
+    billboard.Size        = UDim2.new(0, 200, 0, 50)
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true
+    billboard.MaxDistance = 9e9
+    billboard.Parent      = instance
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Size                   = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.TextColor3             = color
+    textLabel.TextStrokeColor3       = Color3.new(0, 0, 0)
+    textLabel.TextStrokeTransparency = 0.3
+    textLabel.Font                   = Enum.Font.SourceSansBold
+    textLabel.TextSize               = 16
+    textLabel.Text                   = displayName .. "\n0 studs"
+    textLabel.Parent                 = billboard
+
+    local connections = {}
+
+    local ancestryConn
+    ancestryConn = instance.AncestryChanged:Connect(function()
+        if not instance.Parent then
+            ancestryConn:Disconnect()
+            destroyESPInstance(instance)
+        end
+    end)
+    table.insert(connections, ancestryConn)
+
+    if espType == ESP_TYPE.ITEM then
+        local parentConn = instance:GetPropertyChangedSignal("Parent"):Connect(function()
+            if instance:FindFirstAncestorOfClass("Player") then
+                destroyESPInstance(instance)
+            end
+        end)
+        table.insert(connections, parentConn)
+    end
+
+    espInstances[instance] = {
+        instance    = instance,
+        highlight   = highlight,
+        billboard   = billboard,
+        label       = textLabel,
+        type        = espType,
+        name        = displayName,
+        primaryPart = primaryPart,
+        color       = color,
+        extraData   = extraData,
+        connections = connections,
+    }
+    return true
+end
+
+local function updatePlayerESPColor(player, newColor)
+    for _, data in pairs(espInstances) do
+        if data.type == ESP_TYPE.PLAYER and data.extraData and data.extraData.player == player then
+            if data.color ~= newColor then
+                data.color                  = newColor
+                data.highlight.FillColor    = newColor
+                data.highlight.OutlineColor = newColor
+                data.label.TextColor3       = newColor
+            end
+            break
+        end
+    end
+end
+
+local function refreshAllPlayerColors()
+    if not toggles.playersESP then return end
+    for _, data in pairs(espInstances) do
+        if data.type == ESP_TYPE.PLAYER and data.extraData and data.extraData.player then
+            local newColor = getPlayerESPColor(data.extraData.player)
+            if newColor ~= data.color then
+                data.color                  = newColor
+                data.highlight.FillColor    = newColor
+                data.highlight.OutlineColor = newColor
+                data.label.TextColor3       = newColor
+            end
+        end
+    end
+end
+
+local function disconnectESPListeners(espType)
+    if espTypeConnections[espType] then
+        for _, conn in ipairs(espTypeConnections[espType]) do conn:Disconnect() end
+        espTypeConnections[espType] = {}
+    end
+end
+
+local function syncGlobalUpdater()
+    local anyActive = toggles.playersESP or toggles.itemsESP or toggles.npcESP or toggles.heldItemsESP
+    if anyActive then startGlobalDistanceUpdater() else stopGlobalDistanceUpdater() end
+end
+
+-- Forward-declare refreshAllESP
+local refreshAllESP
+
+-- =====================================================================
+-- PLAYER ESP
+-- =====================================================================
+local function attemptCreatePlayerESP(char, player, trackData)
+    if not char or not player then return end
+    if espInstances[char] then
+        if trackData.waitingConn then
+            trackData.waitingConn:Disconnect()
+            trackData.waitingConn     = nil
+            trackData.waitingForParts = false
+        end
+        return
+    end
+    local color   = getPlayerESPColor(player)
+    local created = createESP(char, ESP_TYPE.PLAYER, color, player.Name, {player = player})
+    if created then
+        if trackData.waitingConn then
+            trackData.waitingConn:Disconnect()
+            trackData.waitingConn     = nil
+            trackData.waitingForParts = false
+        end
+    else
+        if not trackData.waitingForParts then
+            trackData.waitingForParts = true
+            trackData.waitingConn = char.DescendantAdded:Connect(function(desc)
+                if desc:IsA("BasePart") and not espInstances[char] then
+                    attemptCreatePlayerESP(char, player, trackData)
+                end
+            end)
+            if char:FindFirstChildWhichIsA("BasePart", true) then
+                attemptCreatePlayerESP(char, player, trackData)
+            end
+        end
+    end
+end
+
+local function trackPlayer(player)
+    if player == localPlayer then return end
+    if playerTrackers[player] then return end
+
+    local trackData = { player=player, connections={}, waitingConn=nil, waitingForParts=false }
+
+    local function handleCharacter(char)
+        if char then attemptCreatePlayerESP(char, player, trackData) end
+    end
+    local function handleCharacterRemoving(char)
+        if char and espInstances[char] then destroyESPInstance(char) end
+        if trackData.waitingConn then
+            trackData.waitingConn:Disconnect()
+            trackData.waitingConn     = nil
+            trackData.waitingForParts = false
+        end
+    end
+
+    if player.Character then handleCharacter(player.Character) end
+    table.insert(trackData.connections, player.CharacterAdded:Connect(handleCharacter))
+    table.insert(trackData.connections, player.CharacterRemoving:Connect(handleCharacterRemoving))
+
+    -- Watch TeamColor and Team property changes
+    table.insert(trackData.connections,
+        player:GetPropertyChangedSignal("TeamColor"):Connect(function()
+            if toggles.playersESP then updatePlayerESPColor(player, getPlayerESPColor(player)) end
+        end))
+    table.insert(trackData.connections,
+        player:GetPropertyChangedSignal("Team"):Connect(function()
+            if toggles.playersESP then updatePlayerESPColor(player, getPlayerESPColor(player)) end
+        end))
+
+    -- Watch custom team Values on the player instance (StringValue/IntValue/NumberValue)
+    -- Also watch faction/side/alliance/group naming variants (see isTeamValue).
+    local function watchTV(obj)
+        if isTeamValue(obj) then
+            table.insert(trackData.connections,
+                obj:GetPropertyChangedSignal("Value"):Connect(function()
+                    if toggles.playersESP then
+                        updatePlayerESPColor(player, getPlayerESPColor(player))
+                    end
+                end))
+        end
+    end
+    for _, child in ipairs(player:GetChildren()) do watchTV(child) end
+    table.insert(trackData.connections,
+        player.ChildAdded:Connect(function(child) watchTV(child) end))
+
+    -- Watch character-level team Values and re-watch after every respawn.
+    local function watchCharTV(char)
+        if not char then return end
+        -- Direct children
+        for _, obj in ipairs(char:GetChildren()) do watchTV(obj) end
+        table.insert(trackData.connections,
+            char.ChildAdded:Connect(function(obj) watchTV(obj) end))
+        -- Deeper descendants (some games nest team info in folders)
+        for _, obj in ipairs(char:GetDescendants()) do watchTV(obj) end
+        table.insert(trackData.connections,
+            char.DescendantAdded:Connect(function(obj) watchTV(obj) end))
+    end
+    if player.Character then watchCharTV(player.Character) end
+    table.insert(trackData.connections,
+        player.CharacterAdded:Connect(function(char)
+            watchCharTV(char)
+            -- Re-evaluate colour after new character loads
+            task.defer(function()
+                if toggles.playersESP and playerTrackers[player] then
+                    updatePlayerESPColor(player, getPlayerESPColor(player))
+                end
+            end)
+        end))
+
+    playerTrackers[player] = trackData
+end
+
+local function untrackPlayer(player)
+    local trackData = playerTrackers[player]
+    if not trackData then return end
+    if trackData.waitingConn then trackData.waitingConn:Disconnect() end
+    for _, conn in ipairs(trackData.connections) do conn:Disconnect() end
+    local toDestroy = {}
+    for inst, data in pairs(espInstances) do
+        if data.type == ESP_TYPE.PLAYER and data.extraData and data.extraData.player == player then
+            toDestroy[#toDestroy+1] = inst
+        end
+    end
+    for _, inst in ipairs(toDestroy) do destroyESPInstance(inst) end
+    playerTrackers[player] = nil
+end
+
+function togglePlayersESP(enable)
+    if enable then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= localPlayer then trackPlayer(player) end
+        end
+        table.insert(espTypeConnections.players, Players.PlayerAdded:Connect(function(player)
+            if player ~= localPlayer then trackPlayer(player) end
+        end))
+        table.insert(espTypeConnections.players, Players.PlayerRemoving:Connect(untrackPlayer))
+        -- Watch both TeamColor and Team on localPlayer
+        table.insert(espTypeConnections.players,
+            localPlayer:GetPropertyChangedSignal("TeamColor"):Connect(refreshAllPlayerColors))
+        table.insert(espTypeConnections.players,
+            localPlayer:GetPropertyChangedSignal("Team"):Connect(refreshAllPlayerColors))
+        table.insert(espTypeConnections.players, localPlayer.CharacterAdded:Connect(refreshAllESP))
+
+        -- Event-driven custom team Value watcher on localPlayer and character.
+        -- Uses isTeamValue (StringValue/IntValue/NumberValue, "team*"/"faction"/etc.)
+        -- No polling — fires only when a Value actually changes.
+        local function watchLocalTV(obj)
+            if isTeamValue(obj) then
+                table.insert(espTypeConnections.players,
+                    obj:GetPropertyChangedSignal("Value"):Connect(function()
+                        if toggles.playersESP then refreshAllPlayerColors() end
+                    end))
+            end
+        end
+        local function watchLocalChar(char)
+            if not char then return end
+            for _, obj in ipairs(char:GetChildren())    do watchLocalTV(obj) end
+            for _, obj in ipairs(char:GetDescendants()) do watchLocalTV(obj) end
+            table.insert(espTypeConnections.players,
+                char.ChildAdded:Connect(function(obj) watchLocalTV(obj) end))
+            table.insert(espTypeConnections.players,
+                char.DescendantAdded:Connect(function(obj) watchLocalTV(obj) end))
+        end
+        -- Player instance children
+        for _, child in ipairs(localPlayer:GetChildren()) do watchLocalTV(child) end
+        table.insert(espTypeConnections.players,
+            localPlayer.ChildAdded:Connect(function(child) watchLocalTV(child) end))
+        -- Current and future characters
+        if localPlayer.Character then watchLocalChar(localPlayer.Character) end
+        table.insert(espTypeConnections.players,
+            localPlayer.CharacterAdded:Connect(function(char)
+                watchLocalChar(char)
+                refreshAllPlayerColors()
+            end))
+    else
+        local toUntrack = {}
+        for player in pairs(playerTrackers) do toUntrack[#toUntrack+1] = player end
+        for _, player in ipairs(toUntrack) do untrackPlayer(player) end
+        disconnectESPListeners("players")
+    end
+    syncGlobalUpdater()
+end
+
+-- =====================================================================
+-- ITEM ESP
+-- =====================================================================
+local function isExcludedFromItemESP(obj)
+    if isPlayerCharacterOrPart(obj) then return true end
+    if obj:FindFirstChildWhichIsA("Humanoid", true) then return true end
+    local ancestor = obj.Parent
+    while ancestor and ancestor ~= Workspace do
+        if ancestor:IsA("Model") and ancestor:FindFirstChildWhichIsA("Humanoid", true) then
+            return true
+        end
+        ancestor = ancestor.Parent
+    end
+    return false
+end
+
+local function getRootItemContainer(obj)
+    local best    = nil
+    local current = obj.Parent
+    while current and current ~= Workspace do
+        if current:FindFirstAncestorOfClass("Player") then return nil end
+        if current:IsA("Model") then
+            if current:FindFirstChildWhichIsA("Humanoid", true) then break end
+            best = current
+        elseif current:IsA("BasePart") and not best then
+            best = current
+        end
+        current = current.Parent
+    end
+    return best
+end
+
+local function findInteractionComponent(obj)
+    for _, child in ipairs(obj:GetChildren()) do
+        if child:IsA("ProximityPrompt") or child:IsA("ClickDetector") then return child end
+    end
+    local pp = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if pp then return pp end
+    return obj:FindFirstChildWhichIsA("ClickDetector", true)
+end
+
+local function classifyAsItem(obj)
+    if isExcludedFromItemESP(obj) then return false end
+    if obj:IsA("Tool") then
+        return (not obj:FindFirstAncestorOfClass("Player")
+            and not isPlayerCharacterOrPart(obj)) and obj or false
+    end
+    if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
+        local root = getRootItemContainer(obj)
+        if root and not isExcludedFromItemESP(root) then return root end
+        local parent = obj.Parent
+        if parent and (parent:IsA("Model") or parent:IsA("BasePart"))
+            and not isExcludedFromItemESP(parent) then return parent end
+        return false
+    end
+    if obj:IsA("Model") or obj:IsA("BasePart") then
+        if findInteractionComponent(obj) then return obj end
+    end
+    return false
+end
+
+function toggleItemsESP(enable)
+    if enable then
+        local function scanItems()
+            for _, obj in ipairs(Workspace:GetDescendants()) do
+                local container = classifyAsItem(obj)
+                if container and not espInstances[container] then
+                    createESP(container, ESP_TYPE.ITEM, Color3.new(1,1,0), container.Name)
+                end
+            end
+        end
+        scanItems()
+        table.insert(espTypeConnections.items, Workspace.DescendantAdded:Connect(function(obj)
+            if not toggles.itemsESP then return end
+            local container = classifyAsItem(obj)
+            if container and not espInstances[container] then
+                createESP(container, ESP_TYPE.ITEM, Color3.new(1,1,0), container.Name)
+            end
+        end))
+        table.insert(espTypeConnections.items, localPlayer.CharacterAdded:Connect(function()
+            if toggles.itemsESP then scanItems() end
+        end))
+    else
+        local toDestroy = {}
+        for inst, data in pairs(espInstances) do
+            if data.type == ESP_TYPE.ITEM then toDestroy[#toDestroy+1] = inst end
+        end
+        for _, inst in ipairs(toDestroy) do destroyESPInstance(inst) end
+        disconnectESPListeners("items")
+    end
+    syncGlobalUpdater()
+end
+
+-- =====================================================================
+-- NPC ESP
+-- =====================================================================
+local function isNPC(model)
+    if not model:IsA("Model") then return false end
+    if not model:FindFirstChildWhichIsA("Humanoid", true) then return false end
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character then
+            if model == plr.Character or model:IsDescendantOf(plr.Character) then return false end
+        end
+    end
+    return true
+end
+
+function toggleNPCsESP(enable)
+    if enable then
+        local function tryCreateNPCESP(model)
+            if not model or espInstances[model] then return end
+            if not isNPC(model) then return end
+            createESP(model, ESP_TYPE.NPC, Color3.new(0,1,1), model.Name)
+        end
+        local function scanNPCs()
+            for _, obj in ipairs(Workspace:GetDescendants()) do tryCreateNPCESP(obj) end
+        end
+        scanNPCs()
+        table.insert(espTypeConnections.npcs, Workspace.DescendantAdded:Connect(function(obj)
+            if not toggles.npcESP then return end
+            if isNPC(obj) and not espInstances[obj] then tryCreateNPCESP(obj); return end
+            if obj:IsA("Humanoid") then
+                local npcModel = obj:FindFirstAncestorWhichIsA("Model")
+                if npcModel and isNPC(npcModel) and not espInstances[npcModel] then
+                    tryCreateNPCESP(npcModel)
+                end
+            end
+        end))
+        table.insert(espTypeConnections.npcs, localPlayer.CharacterAdded:Connect(function()
+            if toggles.npcESP then scanNPCs() end
+        end))
+        local function onPlayerCharacterAdded(char)
+            if espInstances[char] and espInstances[char].type == ESP_TYPE.NPC then
+                destroyESPInstance(char)
+            end
+        end
+        for _, player in ipairs(Players:GetPlayers()) do
+            table.insert(espTypeConnections.npcs, player.CharacterAdded:Connect(onPlayerCharacterAdded))
+        end
+        table.insert(espTypeConnections.npcs, Players.PlayerAdded:Connect(function(player)
+            table.insert(espTypeConnections.npcs, player.CharacterAdded:Connect(onPlayerCharacterAdded))
+        end))
+    else
+        local toDestroy = {}
+        for inst, data in pairs(espInstances) do
+            if data.type == ESP_TYPE.NPC then toDestroy[#toDestroy+1] = inst end
+        end
+        for _, inst in ipairs(toDestroy) do destroyESPInstance(inst) end
+        disconnectESPListeners("npcs")
+    end
+    syncGlobalUpdater()
+end
+
+-- =====================================================================
+-- HELD ITEMS ESP
+-- =====================================================================
+local HELD_ITEM_COLOR = Color3.new(1, 0.5, 0)
+
+local function tryCreateHeldItemESP(tool, player)
+    if not tool:IsA("Tool") then return end
+    if espInstances[tool] and espInstances[tool].type ~= ESP_TYPE.HELD_ITEM then return end
+    createESP(tool, ESP_TYPE.HELD_ITEM, HELD_ITEM_COLOR, tool.Name, {player = player, tool = tool})
+end
+
+local function trackPlayerHeldItems(player)
+    if heldItemTrackers[player] then return end
+    local tracker = { player=player, connections={} }
+
+    local function onCharacterAdded(char)
+        for _, child in ipairs(char:GetChildren()) do
+            if child:IsA("Tool") then tryCreateHeldItemESP(child, player) end
+        end
+        table.insert(tracker.connections, char.ChildAdded:Connect(function(child)
+            if child:IsA("Tool") then tryCreateHeldItemESP(child, player) end
+        end))
+        table.insert(tracker.connections, char.ChildRemoved:Connect(function(child)
+            if child:IsA("Tool") and espInstances[child] then destroyESPInstance(child) end
+        end))
+    end
+
+    local function onCharacterRemoving(char)
+        if char then
+            for _, child in ipairs(char:GetChildren()) do
+                if child:IsA("Tool") and espInstances[child] then destroyESPInstance(child) end
+            end
+        end
+    end
+
+    if player.Character then onCharacterAdded(player.Character) end
+    table.insert(tracker.connections, player.CharacterAdded:Connect(onCharacterAdded))
+    table.insert(tracker.connections, player.CharacterRemoving:Connect(onCharacterRemoving))
+    heldItemTrackers[player] = tracker
+end
+
+local function untrackPlayerHeldItems(player)
+    local tracker = heldItemTrackers[player]
+    if not tracker then return end
+    for _, conn in ipairs(tracker.connections) do conn:Disconnect() end
+    local toDestroy = {}
+    for inst, data in pairs(espInstances) do
+        if data.type == ESP_TYPE.HELD_ITEM and data.extraData and data.extraData.player == player then
+            toDestroy[#toDestroy+1] = inst
+        end
+    end
+    for _, inst in ipairs(toDestroy) do destroyESPInstance(inst) end
+    heldItemTrackers[player] = nil
+end
+
+function toggleHeldItemsESP(enable)
+    if enable then
+        for _, player in ipairs(Players:GetPlayers()) do trackPlayerHeldItems(player) end
+        table.insert(espTypeConnections.helditems, Players.PlayerAdded:Connect(trackPlayerHeldItems))
+        table.insert(espTypeConnections.helditems, Players.PlayerRemoving:Connect(untrackPlayerHeldItems))
+    else
+        local toUntrack = {}
+        for player in pairs(heldItemTrackers) do toUntrack[#toUntrack+1] = player end
+        for _, player in ipairs(toUntrack) do untrackPlayerHeldItems(player) end
+        disconnectESPListeners("helditems")
+    end
+    syncGlobalUpdater()
+end
+
+-- =====================================================================
+-- RESPAWN FAILSAFE
+-- =====================================================================
+refreshAllESP = function()
+    if toggles.playersESP then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= localPlayer and player.Character and not espInstances[player.Character] then
+                createESP(player.Character, ESP_TYPE.PLAYER,
+                    getPlayerESPColor(player), player.Name, {player = player})
+            end
+        end
+    end
+    if toggles.itemsESP then
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            local container = classifyAsItem(obj)
+            if container and not espInstances[container] then
+                createESP(container, ESP_TYPE.ITEM, Color3.new(1,1,0), container.Name)
+            end
+        end
+    end
+    if toggles.npcESP then
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if isNPC(obj) and not espInstances[obj] then
+                createESP(obj, ESP_TYPE.NPC, Color3.new(0,1,1), obj.Name)
+            end
+        end
+    end
+    if toggles.heldItemsESP then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player.Character then
+                for _, child in ipairs(player.Character:GetChildren()) do
+                    if child:IsA("Tool") and not espInstances[child] then
+                        createESP(child, ESP_TYPE.HELD_ITEM, HELD_ITEM_COLOR, child.Name, {player = player})
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- =====================================================================
+-- FULLBRIGHT
+-- =====================================================================
+function toggleFullbright(enable)
+    if enable then
+        captureOriginalLighting()
+        Lighting.Ambient           = Color3.new(1,1,1)
+        Lighting.Brightness        = 2
+        Lighting.ColorShift_Bottom = Color3.new(1,1,1)
+        Lighting.ColorShift_Top    = Color3.new(1,1,1)
+        Lighting.FogEnd            = 100000
+        Lighting.FogStart          = 0
+        Lighting.GlobalShadows     = false
+        Lighting.OutdoorAmbient    = Color3.new(1,1,1)
+        Lighting.ClockTime         = 12
+        pcall(function() Lighting.ShadowSoftness     = 0 end)
+        pcall(function() Lighting.GeographicLatitude = 0 end)
+    else
+        if originalLightingProperties then
+            for prop, val in pairs(originalLightingProperties) do
+                pcall(function() Lighting[prop] = val end)
+            end
+            if toggles.fpsBoost then
+                Lighting.GlobalShadows = false
+                Lighting.FogEnd        = 100000
+                Lighting.Brightness    = 0
+            end
+        end
+        releaseOriginalLighting()
+    end
+end
+
+-- =====================================================================
+-- NOCLIP
+-- =====================================================================
+function toggleNoclip(enable)
+    if enable then
+        local function disablePartCollision(part)
+            if part:IsA("BasePart") then
+                if noclipOriginalStates[part] == nil then
+                    noclipOriginalStates[part] = part.CanCollide
+                end
+                part.CanCollide = false
+            end
+        end
+        local function applyNoclipToChar(char)
+            for _, part in ipairs(char:GetDescendants()) do disablePartCollision(part) end
+            table.insert(noclipConnections, char.DescendantAdded:Connect(disablePartCollision))
+        end
+
+        if localPlayer.Character then applyNoclipToChar(localPlayer.Character) end
+        table.insert(noclipConnections, localPlayer.CharacterAdded:Connect(function(newChar)
+            if toggles.noclip then applyNoclipToChar(newChar) end
+        end))
+
+        noclipHeartbeat = RunService.Heartbeat:Connect(function()
+            if not toggles.noclip then return end
+            local char = localPlayer.Character
+            if not char then return end
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide then part.CanCollide = false end
+            end
+        end)
+    else
+        if noclipHeartbeat then noclipHeartbeat:Disconnect(); noclipHeartbeat = nil end
+        for _, conn in ipairs(noclipConnections) do conn:Disconnect() end
+        noclipConnections = {}
+        for part, original in pairs(noclipOriginalStates) do
+            if part and part.Parent then part.CanCollide = original end
+        end
+        noclipOriginalStates = setmetatable({}, { __mode = "k" })
+    end
+end
+
+-- =====================================================================
+-- TP TOOL
+-- =====================================================================
+function toggleTPTool(enable)
+    if enable then
+        local tool = Instance.new("Tool")
+        tool.Name           = "Teleport Tool"
+        tool.RequiresHandle = false
+        tool.CanBeDropped   = true
+        tool.Parent         = localPlayer.Backpack
+
+        local mouse  = localPlayer:GetMouse()
+        local marker = nil
+
+        tool.Equipped:Connect(function()
+            marker              = Instance.new("Part")
+            marker.Anchored     = true
+            marker.CanCollide   = false
+            marker.Size         = Vector3.new(2, 0.2, 2)
+            marker.BrickColor   = BrickColor.new("Bright blue")
+            marker.Material     = Enum.Material.Neon
+            marker.Transparency = 0.5
+            marker.Parent       = workspace
+        end)
+        tool.Unequipped:Connect(function()
+            if marker then marker:Destroy(); marker = nil end
+        end)
+        tool.Activated:Connect(function()
+            if not marker then return end
+            local char = localPlayer.Character
+            if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+
+            local target    = mouse.Hit.Position
+            local rayParams = RaycastParams.new()
+            rayParams.FilterDescendantsInstances = { char }
+            rayParams.FilterType = Enum.RaycastFilterType.Exclude
+            local rayResult = workspace:Raycast(target + Vector3.new(0,10,0), Vector3.new(0,-20,0), rayParams)
+            if rayResult then target = rayResult.Position + Vector3.new(0,3,0) end
+            marker.CFrame = CFrame.new(target)
+            task.wait(0.05)
+            char.HumanoidRootPart.CFrame = CFrame.new(target)
+        end)
+
+        toggles.tpToolObject = tool
+    else
+        if toggles.tpToolObject then toggles.tpToolObject:Destroy(); toggles.tpToolObject = nil end
+    end
+end
+
+-- =====================================================================
+-- FPS BOOST
+-- =====================================================================
+-- IMPROVEMENTS over previous version:
+--   Added: settings().Rendering.QualityLevel = "Level01"
+--          Drops render quality to minimum — single biggest FPS gain.
+--          Saved before applying, restored on disable.
+--   Added: Lighting.Brightness = 0
+--          Reduces per-pixel lighting computation cost.
+--          Saved in captureOriginalLighting() (already present), restored
+--          on disable alongside other lighting props.
+--   Retained: character exclusion, DescendantAdded listener, save/restore
+--             of all per-instance properties, effect disabling.
+-- =====================================================================
+local function isPartOfAnyCharacter(obj)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player.Character and obj:IsDescendantOf(player.Character) then
+            return true
+        end
+    end
+    return false
+end
+
+local function applyFPSBoostToInstance(inst)
+    -- Skip player character parts to preserve appearance
+    if isPartOfAnyCharacter(inst) then return end
+
+    if inst:IsA("Part") or inst:IsA("Union") or inst:IsA("CornerWedgePart")
+        or inst:IsA("TrussPart") or inst:IsA("MeshPart") then
+        if not fpsBoostData.partProps[inst] then
+            fpsBoostData.partProps[inst] = {
+                Material    = inst.Material,
+                Reflectance = inst.Reflectance,
+                TextureID   = inst:IsA("MeshPart") and inst.TextureID or nil,
+            }
+        end
+        inst.Material    = Enum.Material.Plastic
+        inst.Reflectance = 0
+        if inst:IsA("MeshPart") then inst.TextureID = "" end
+    end
+    if inst:IsA("Decal") or inst:IsA("Texture") then
+        if not fpsBoostData.decalProps[inst] then
+            fpsBoostData.decalProps[inst] = { Transparency = inst.Transparency }
+        end
+        inst.Transparency = 1
+    end
+    if inst:IsA("ParticleEmitter") or inst:IsA("Trail") then
+        if not fpsBoostData.particleProps[inst] then
+            fpsBoostData.particleProps[inst] = { Enabled = inst.Enabled }
+        end
+        inst.Enabled = false
+    end
+    if inst:IsA("Fire") or inst:IsA("SpotLight") or inst:IsA("Smoke") or inst:IsA("Sparkles") then
+        if not fpsBoostData.lightProps[inst] then
+            fpsBoostData.lightProps[inst] = { Enabled = inst.Enabled }
+        end
+        inst.Enabled = false
+    end
+    if inst:IsA("Explosion") then
+        if not fpsBoostData.effectProps[inst] then
+            fpsBoostData.effectProps[inst] = {
+                BlastPressure = inst.BlastPressure,
+                BlastRadius   = inst.BlastRadius,
+            }
+        end
+        inst.BlastPressure = 1
+        inst.BlastRadius   = 1
+    end
+    if inst:IsA("BlurEffect") or inst:IsA("SunRaysEffect") or inst:IsA("ColorCorrectionEffect")
+        or inst:IsA("BloomEffect") or inst:IsA("DepthOfFieldEffect") then
+        if not fpsBoostData.effectProps[inst] then
+            fpsBoostData.effectProps[inst] = { Enabled = inst.Enabled }
+        end
+        inst.Enabled = false
+    end
+end
+
+local function restoreFPSBoostData()
+    for inst, props in pairs(fpsBoostData.partProps) do
+        if inst and inst.Parent then
+            inst.Material    = props.Material
+            inst.Reflectance = props.Reflectance
+            if props.TextureID ~= nil then inst.TextureID = props.TextureID end
+        end
+    end
+    fpsBoostData.partProps = setmetatable({}, { __mode = "k" })
+    for inst, props in pairs(fpsBoostData.decalProps) do
+        if inst and inst.Parent then inst.Transparency = props.Transparency end
+    end
+    fpsBoostData.decalProps = setmetatable({}, { __mode = "k" })
+    for inst, props in pairs(fpsBoostData.effectProps) do
+        if inst and inst.Parent then
+            if props.Enabled ~= nil then
+                inst.Enabled = props.Enabled
+            end
+            -- Explosion shape: restore BlastPressure / BlastRadius
+            if props.BlastPressure ~= nil then
+                pcall(function() inst.BlastPressure = props.BlastPressure end)
+            end
+            if props.BlastRadius ~= nil then
+                pcall(function() inst.BlastRadius = props.BlastRadius end)
+            end
+        end
+    end
+    fpsBoostData.effectProps = setmetatable({}, { __mode = "k" })
+    for inst, props in pairs(fpsBoostData.lightProps) do
+        if inst and inst.Parent then inst.Enabled = props.Enabled end
+    end
+    fpsBoostData.lightProps = setmetatable({}, { __mode = "k" })
+    for inst, props in pairs(fpsBoostData.particleProps) do
+        if inst and inst.Parent then inst.Enabled = props.Enabled end
+    end
+    fpsBoostData.particleProps = setmetatable({}, { __mode = "k" })
+    if fpsBoostData.descendantConn then
+        fpsBoostData.descendantConn:Disconnect()
+        fpsBoostData.descendantConn = nil
+    end
+end
+
+function toggleFPSBoost(enable)
+    if enable then
+        captureOriginalLighting()
+
+        -- Terrain water
+        if not fpsBoostProperties.Terrain then
+            fpsBoostProperties.Terrain = {
+                WaterWaveSize     = Workspace.Terrain.WaterWaveSize,
+                WaterWaveSpeed    = Workspace.Terrain.WaterWaveSpeed,
+                WaterReflectance  = Workspace.Terrain.WaterReflectance,
+                WaterTransparency = Workspace.Terrain.WaterTransparency,
+            }
+        end
+        Workspace.Terrain.WaterWaveSize     = 0
+        Workspace.Terrain.WaterWaveSpeed    = 0
+        Workspace.Terrain.WaterReflectance  = 0
+        Workspace.Terrain.WaterTransparency = 0
+
+        -- Lighting
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd        = 100000
+        Lighting.Brightness    = 0   -- [NEW] reduces lighting computation cost
+
+        -- [NEW] Render quality — single biggest FPS gain available via settings()
+        -- Falls back silently if the executor does not expose settings()
+        if not fpsBoostProperties.QualityLevel then
+            pcall(function()
+                fpsBoostProperties.QualityLevel = settings().Rendering.QualityLevel
+            end)
+        end
+        pcall(function()
+            settings().Rendering.QualityLevel = "Level01"
+        end)
+
+        -- Per-instance optimisations
+        for _, obj in ipairs(Workspace:GetDescendants()) do applyFPSBoostToInstance(obj) end
+        for _, obj in ipairs(Lighting:GetDescendants())  do applyFPSBoostToInstance(obj) end
+
+        fpsBoostData.descendantConn = Workspace.DescendantAdded:Connect(function(obj)
+            if toggles.fpsBoost then applyFPSBoostToInstance(obj) end
+        end)
+    else
+        -- Restore terrain
+        if fpsBoostProperties.Terrain then
+            Workspace.Terrain.WaterWaveSize     = fpsBoostProperties.Terrain.WaterWaveSize
+            Workspace.Terrain.WaterWaveSpeed    = fpsBoostProperties.Terrain.WaterWaveSpeed
+            Workspace.Terrain.WaterReflectance  = fpsBoostProperties.Terrain.WaterReflectance
+            Workspace.Terrain.WaterTransparency = fpsBoostProperties.Terrain.WaterTransparency
+            fpsBoostProperties.Terrain = nil
+        end
+        -- Restore render quality
+        if fpsBoostProperties.QualityLevel ~= nil then
+            pcall(function()
+                settings().Rendering.QualityLevel = fpsBoostProperties.QualityLevel
+            end)
+            fpsBoostProperties.QualityLevel = nil
+        end
+        -- Restore lighting (Brightness included via originalLightingProperties)
+        if not toggles.fullbright and originalLightingProperties then
+            Lighting.GlobalShadows = originalLightingProperties.GlobalShadows
+            Lighting.FogEnd        = originalLightingProperties.FogEnd
+            -- Brightness is restored with the full lighting restore in cleanupAll,
+            -- but we also patch it here so toggling FPS Boost alone restores it
+            pcall(function() Lighting.Brightness = originalLightingProperties.Brightness end)
+        end
+        restoreFPSBoostData()
+        releaseOriginalLighting()
+    end
+end
+
+-- =====================================================================
+-- WALKSPEED
+-- =====================================================================
+function toggleWalkspeed(enable)
+    if enable then
+        -- Helper: save original, apply desired speed, and attach a
+        -- GetPropertyChangedSignal watcher so if the server resets
+        -- WalkSpeed mid-life the value is silently restored immediately.
+        local function applyWalkspeed(humanoid)
+            if not humanoid then return end
+            -- Save original only once per humanoid instance
+            if not walkspeedOriginalValues[humanoid] then
+                walkspeedOriginalValues[humanoid] = humanoid.WalkSpeed
+            end
+            humanoid.WalkSpeed = WALK_SPEED
+
+            -- Property-changed watcher: fires the instant the server
+            -- (or any game script) changes WalkSpeed back
+            local propConn
+            propConn = humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+                if not toggles.walkspeed then propConn:Disconnect(); return end
+                if humanoid.WalkSpeed ~= WALK_SPEED then
+                    humanoid.WalkSpeed = WALK_SPEED
+                end
+            end)
+            table.insert(walkspeedConnections, propConn)
+        end
+
+        local function applyToChar(char)
+            if not char then return end
+            local humanoid = char:FindFirstChildWhichIsA("Humanoid", true)
+            if humanoid then applyWalkspeed(humanoid) end
+        end
+
+        applyToChar(localPlayer.Character)
+
+        -- Re-apply after every respawn
+        table.insert(walkspeedConnections, localPlayer.CharacterAdded:Connect(function(newChar)
+            if not toggles.walkspeed then return end
+            applyToChar(newChar)
+            -- Also catch Humanoid if it loads late (custom rigs)
+            local innerConn = newChar.DescendantAdded:Connect(function(desc)
+                if toggles.walkspeed and desc:IsA("Humanoid") then
+                    applyWalkspeed(desc)
+                end
+            end)
+            local removeConn
+            removeConn = newChar.AncestryChanged:Connect(function()
+                if not newChar.Parent then
+                    innerConn:Disconnect()
+                    removeConn:Disconnect()
+                end
+            end)
+        end))
+
+        -- Heartbeat re-enforcer: last line of defence — catches any
+        -- server-side reset that isn't reflected in a property-changed
+        -- event (e.g. direct network property writes in some games).
+        walkspeedHeartbeat = RunService.Heartbeat:Connect(function()
+            if not toggles.walkspeed then return end
+            local char = localPlayer.Character
+            if not char then return end
+            local hum = char:FindFirstChildWhichIsA("Humanoid")
+            if hum and hum.WalkSpeed ~= WALK_SPEED then
+                hum.WalkSpeed = WALK_SPEED
+            end
+        end)
+
+        syncUndergroundRecovery()
+    else
+        if walkspeedHeartbeat then walkspeedHeartbeat:Disconnect(); walkspeedHeartbeat = nil end
+        for _, conn in ipairs(walkspeedConnections) do conn:Disconnect() end
+        walkspeedConnections = {}
+        -- Restore original WalkSpeed for every saved humanoid
+        for humanoid, original in pairs(walkspeedOriginalValues) do
+            if humanoid and humanoid.Parent then humanoid.WalkSpeed = original end
+        end
+        walkspeedOriginalValues = setmetatable({}, { __mode = "k" })
+        syncUndergroundRecovery()
+    end
+end
+
+-- =====================================================================
+-- FLY
+-- =====================================================================
+local FLY_GROUND_BUFFER = 4
+
+local function flyGroundCheck(rootPart, char, moveDir)
+    if moveDir.Y >= 0 then return moveDir end
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = { char }
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    local checkDist = FLY_GROUND_BUFFER + math.abs(moveDir.Y) * 0.2
+    local result    = workspace:Raycast(rootPart.Position, Vector3.new(0, -checkDist, 0), rayParams)
+    if result then return Vector3.new(moveDir.X, 0, moveDir.Z) end
+    return moveDir
+end
+
+function toggleFly(enable)
+    if enable then
+        if flyActive then
+            flyActive = false
+            for _, conn in ipairs(flyConnections) do conn:Disconnect() end
+            flyConnections = {}
+            if flyLinearVelocity   then flyLinearVelocity:Destroy();   flyLinearVelocity   = nil end
+            if flyAlignOrientation then flyAlignOrientation:Destroy(); flyAlignOrientation = nil end
+            if flyAttachment       then flyAttachment:Destroy();       flyAttachment       = nil end
+            if flyAttachmentGyro   then flyAttachmentGyro:Destroy();   flyAttachmentGyro   = nil end
+        end
+
+        local char = localPlayer.Character
+        if not char then return end
+        local rootPart = char:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+
+        flyAttachment        = Instance.new("Attachment")
+        flyAttachment.Parent = rootPart
+
+        flyLinearVelocity                        = Instance.new("LinearVelocity")
+        flyLinearVelocity.Attachment0            = flyAttachment
+        flyLinearVelocity.MaxForce               = math.huge
+        flyLinearVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+        flyLinearVelocity.RelativeTo             = Enum.ActuatorRelativeTo.World
+        flyLinearVelocity.VectorVelocity         = Vector3.new(0, 0, 0)
+        flyLinearVelocity.Parent                 = rootPart
+
+        flyAttachmentGyro        = Instance.new("Attachment")
+        flyAttachmentGyro.Parent = rootPart
+
+        flyAlignOrientation                     = Instance.new("AlignOrientation")
+        flyAlignOrientation.Mode               = Enum.OrientationAlignmentMode.OneAttachment
+        flyAlignOrientation.Attachment0        = flyAttachmentGyro
+        flyAlignOrientation.MaxTorque          = math.huge
+        flyAlignOrientation.MaxAngularVelocity = math.huge
+        flyAlignOrientation.Responsiveness     = 200
+        flyAlignOrientation.RigidityEnabled    = false
+        flyAlignOrientation.Parent             = rootPart
+
+        local humanoid = char:FindFirstChild("Humanoid")
+        if humanoid then
+            flyOrigPlatformStand = humanoid.PlatformStand   -- save original
+            humanoid.PlatformStand = true
+        end
+
+        -- flyActive set AFTER all objects are created so heartbeat
+        -- cannot fire mid-setup
+        flyActive = true
+        syncUndergroundRecovery()
+
+        local moveConn
+        moveConn = RunService.Heartbeat:Connect(function()
+            if not flyActive or not char or not char.Parent then
+                moveConn:Disconnect(); return
+            end
+            if not char:FindFirstChild("HumanoidRootPart") then return end
+
+            -- Re-enforce PlatformStand every frame: if the server resets it
+            -- the character starts falling even though constraints still run.
+            local hum = char:FindFirstChildWhichIsA("Humanoid")
+            if hum and not hum.PlatformStand then
+                hum.PlatformStand = true
+            end
+
+            -- Re-create constraints if the server destroyed them
+            if not flyLinearVelocity or not flyLinearVelocity.Parent
+            or not flyAlignOrientation or not flyAlignOrientation.Parent then
+                if toggles.fly then
+                    -- Tear down remnants and rebuild
+                    if flyLinearVelocity   then pcall(function() flyLinearVelocity:Destroy()   end); flyLinearVelocity   = nil end
+                    if flyAlignOrientation then pcall(function() flyAlignOrientation:Destroy() end); flyAlignOrientation = nil end
+                    if flyAttachment       then pcall(function() flyAttachment:Destroy()       end); flyAttachment       = nil end
+                    if flyAttachmentGyro   then pcall(function() flyAttachmentGyro:Destroy()   end); flyAttachmentGyro   = nil end
+                    local rp = char:FindFirstChild("HumanoidRootPart")
+                    if rp then
+                        flyAttachment        = Instance.new("Attachment"); flyAttachment.Parent = rp
+                        flyLinearVelocity    = Instance.new("LinearVelocity")
+                        flyLinearVelocity.Attachment0            = flyAttachment
+                        flyLinearVelocity.MaxForce               = math.huge
+                        flyLinearVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+                        flyLinearVelocity.RelativeTo             = Enum.ActuatorRelativeTo.World
+                        flyLinearVelocity.VectorVelocity         = Vector3.new(0,0,0)
+                        flyLinearVelocity.Parent                 = rp
+                        flyAttachmentGyro    = Instance.new("Attachment"); flyAttachmentGyro.Parent = rp
+                        flyAlignOrientation  = Instance.new("AlignOrientation")
+                        flyAlignOrientation.Mode               = Enum.OrientationAlignmentMode.OneAttachment
+                        flyAlignOrientation.Attachment0        = flyAttachmentGyro
+                        flyAlignOrientation.MaxTorque          = math.huge
+                        flyAlignOrientation.MaxAngularVelocity = math.huge
+                        flyAlignOrientation.Responsiveness     = 200
+                        flyAlignOrientation.RigidityEnabled    = false
+                        flyAlignOrientation.Parent             = rp
+                    end
+                end
+                return
+            end
+
+            if flyAlignOrientation then
+                flyAlignOrientation.CFrame = CFrame.new(Vector3.new(), camera.CFrame.LookVector)
+            end
+            local moveDir = Vector3.new()
+            if UserInputService:IsKeyDown(Enum.KeyCode.W)           then moveDir = moveDir + camera.CFrame.LookVector * Vector3.new(1,0,1) end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S)           then moveDir = moveDir - camera.CFrame.LookVector * Vector3.new(1,0,1) end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A)           then moveDir = moveDir - camera.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D)           then moveDir = moveDir + camera.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space)       then moveDir = moveDir + Vector3.new(0,1,0) end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then moveDir = moveDir - Vector3.new(0,1,0) end
+            if moveDir.Magnitude > 0 then moveDir = moveDir.Unit end
+            local rootNow = char:FindFirstChild("HumanoidRootPart")
+            if rootNow then moveDir = flyGroundCheck(rootNow, char, moveDir) end
+            if flyLinearVelocity then flyLinearVelocity.VectorVelocity = moveDir * FLY_SPEED end
+        end)
+        table.insert(flyConnections, moveConn)
+
+        -- Auto-restart fly after respawn while toggle is still ON
+        local respawnConn = localPlayer.CharacterAdded:Connect(function()
+            if not toggles.fly then return end
+            -- Small wait for the new character to fully load
+            task.wait(0.25)
+            if toggles.fly then toggleFly(true) end
+        end)
+        table.insert(flyConnections, respawnConn)
+
+        if humanoid then
+            table.insert(flyConnections, humanoid.Died:Connect(function()
+                -- Don't disable toggle — CharacterAdded will re-enable
+                flyActive = false
+                if flyLinearVelocity   then pcall(function() flyLinearVelocity:Destroy()   end); flyLinearVelocity   = nil end
+                if flyAlignOrientation then pcall(function() flyAlignOrientation:Destroy() end); flyAlignOrientation = nil end
+                if flyAttachment       then pcall(function() flyAttachment:Destroy()       end); flyAttachment       = nil end
+                if flyAttachmentGyro   then pcall(function() flyAttachmentGyro:Destroy()   end); flyAttachmentGyro   = nil end
+            end))
+        end
+    else
+        flyActive = false
+        for _, conn in ipairs(flyConnections) do conn:Disconnect() end
+        flyConnections = {}
+        if flyLinearVelocity   then flyLinearVelocity:Destroy();   flyLinearVelocity   = nil end
+        if flyAlignOrientation then flyAlignOrientation:Destroy(); flyAlignOrientation = nil end
+        if flyAttachment       then flyAttachment:Destroy();       flyAttachment       = nil end
+        if flyAttachmentGyro   then flyAttachmentGyro:Destroy();   flyAttachmentGyro   = nil end
+        local char = localPlayer.Character
+        if char then
+            local humanoid = char:FindFirstChild("Humanoid")
+            if humanoid then
+                humanoid.PlatformStand = flyOrigPlatformStand ~= nil
+                    and flyOrigPlatformStand or false
+            end
+        end
+        flyOrigPlatformStand = nil
+        syncUndergroundRecovery()
+    end
+end
+
+-- =====================================================================
+-- VEHICLE SPEED (ground-locked speed boost — gravity + suspension preserved)
+-- =====================================================================
+-- Uses VelocityConstraintMode.Plane (XZ only).
+-- Y axis is completely free — gravity, suspension, and ramps work normally.
+-- =====================================================================
+local function disableVehicleSpeed()
+    vehiclespeedActive  = false
+    vehiclespeedVehicle = nil
+    vehiclespeedSeat    = nil
+    if vehiclespeedLinearVelocity then vehiclespeedLinearVelocity:Destroy(); vehiclespeedLinearVelocity = nil end
+    if vehiclespeedAttachment     then vehiclespeedAttachment:Destroy();     vehiclespeedAttachment     = nil end
+    if vehiclespeedHeartbeat      then vehiclespeedHeartbeat:Disconnect();   vehiclespeedHeartbeat      = nil end
+end
+
+local function enableVehicleSpeed(seat)
+    if not seat or not seat:IsA("VehicleSeat") then return end
+    if not seat.Occupant or seat.Occupant.Parent ~= localPlayer.Character then return end
+
+    local vehiclePart = seat
+    if seat.Parent and seat.Parent:IsA("Model") and seat.Parent.PrimaryPart then
+        vehiclePart = seat.Parent.PrimaryPart
+    end
+
+    disableVehicleSpeed()
+
+    vehiclespeedAttachment        = Instance.new("Attachment")
+    vehiclespeedAttachment.Parent = vehiclePart
+
+    vehiclespeedLinearVelocity                        = Instance.new("LinearVelocity")
+    vehiclespeedLinearVelocity.Attachment0            = vehiclespeedAttachment
+    vehiclespeedLinearVelocity.MaxForce               = math.huge
+    vehiclespeedLinearVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Plane
+    vehiclespeedLinearVelocity.PrimaryTangentAxis     = Vector3.new(1, 0, 0)
+    vehiclespeedLinearVelocity.SecondaryTangentAxis   = Vector3.new(0, 0, 1)
+    vehiclespeedLinearVelocity.PlaneVelocity          = Vector2.new(0, 0)
+    vehiclespeedLinearVelocity.Parent                 = vehiclePart
+
+    vehiclespeedActive  = true
+    vehiclespeedVehicle = vehiclePart
+    vehiclespeedSeat    = seat
+    syncUndergroundRecovery()
+
+    vehiclespeedHeartbeat = RunService.Heartbeat:Connect(function()
+        if not vehiclespeedActive then return end
+
+        -- Re-create constraints if the server removed them
+        if not vehiclespeedLinearVelocity or not vehiclespeedLinearVelocity.Parent
+        or not vehiclespeedAttachment     or not vehiclespeedAttachment.Parent then
+            if vehiclespeedSeat and vehiclespeedSeat.Parent
+            and vehiclespeedSeat.Occupant
+            and vehiclespeedSeat.Occupant.Parent == localPlayer.Character then
+                enableVehicleSpeed(vehiclespeedSeat)
+            end
+            return
+        end
+
+        if not vehiclespeedVehicle or not vehiclespeedVehicle.Parent then return end
+
+        local camLook  = camera.CFrame.LookVector
+        local camRight = camera.CFrame.RightVector
+
+        local moveX, moveZ = 0, 0
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveX = moveX + camLook.X;  moveZ = moveZ + camLook.Z  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveX = moveX - camLook.X;  moveZ = moveZ - camLook.Z  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveX = moveX - camRight.X; moveZ = moveZ - camRight.Z end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveX = moveX + camRight.X; moveZ = moveZ + camRight.Z end
+
+        local len = math.sqrt(moveX * moveX + moveZ * moveZ)
+        if len > 0 then moveX = moveX / len; moveZ = moveZ / len end
+
+        vehiclespeedLinearVelocity.PlaneVelocity = Vector2.new(moveX * VEHICLE_SPEED, moveZ * VEHICLE_SPEED)
+    end)
+end
+
+function toggleVehiclespeed(enable)
+    if enable then
+        local function setupSeatMonitoring()
+            local char = localPlayer.Character
+            if not char then return end
+            local humanoid = char:FindFirstChildWhichIsA("Humanoid")
+            if not humanoid then return end
+            if humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
+                enableVehicleSpeed(humanoid.SeatPart)
+            end
+            table.insert(vehiclespeedConnections,
+                humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
+                    if humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
+                        enableVehicleSpeed(humanoid.SeatPart)
+                    else
+                        disableVehicleSpeed()
+                        syncUndergroundRecovery()
+                    end
+                end))
+            table.insert(vehiclespeedConnections,
+                localPlayer.CharacterAdded:Connect(function()
+                    for _, conn in ipairs(vehiclespeedConnections) do conn:Disconnect() end
+                    vehiclespeedConnections = {}
+                    disableVehicleSpeed()
+                    setupSeatMonitoring()
+                end))
+        end
+        setupSeatMonitoring()
+    else
+        disableVehicleSpeed()
+        for _, conn in ipairs(vehiclespeedConnections) do conn:Disconnect() end
+        vehiclespeedConnections = {}
+        syncUndergroundRecovery()
+    end
+end
+
+-- =====================================================================
+-- VEHICLE FLY (full 3D — camera-direction fly with ground check)
+-- =====================================================================
+-- W/S  → full camera look vector (including Y for pitch-based altitude)
+-- A/D  → camera right vector
+-- Ground check prevents terrain clipping when descending
+-- AlignOrientation tracks camera CFrame so vehicle tilts with flight direction
+-- =====================================================================
+local VEHICLE_FLY_GROUND_BUFFER = 3.5
+
+local function vehicleFlyGroundCheck(vehiclePart, moveDir)
+    if moveDir.Y >= 0 then return moveDir end
+    local rayParams = RaycastParams.new()
+    local char = localPlayer.Character
+    if char then
+        rayParams.FilterDescendantsInstances = { vehiclePart.Parent or vehiclePart, char }
+    else
+        rayParams.FilterDescendantsInstances = { vehiclePart.Parent or vehiclePart }
+    end
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    local checkDist = VEHICLE_FLY_GROUND_BUFFER + math.abs(moveDir.Y) * 0.2
+    local result    = workspace:Raycast(vehiclePart.Position, Vector3.new(0, -checkDist, 0), rayParams)
+    if result then return Vector3.new(moveDir.X, 0, moveDir.Z) end
+    return moveDir
+end
+
+local function disableVehicleFly()
+    -- Restore seat inputs before destroying constraints
+    if currentVehicleSeat and currentVehicleSeat.Parent then
+        pcall(function()
+            currentVehicleSeat.ThrottleFloat = vehicleFlyOrigThrottle ~= nil and vehicleFlyOrigThrottle or 0
+            currentVehicleSeat.SteerFloat    = vehicleFlyOrigSteer    ~= nil and vehicleFlyOrigSteer    or 0
+        end)
+    end
+    vehicleFlyOrigThrottle = nil
+    vehicleFlyOrigSteer    = nil
+    vehicleFlyActive   = false
+    currentVehicle     = nil
+    currentVehicleSeat = nil
+    for _, conn in ipairs(vehicleFlyConnections) do conn:Disconnect() end
+    vehicleFlyConnections = {}
+    if vehicleLinearVelocity   then vehicleLinearVelocity:Destroy();   vehicleLinearVelocity   = nil end
+    if vehicleAlignOrientation then vehicleAlignOrientation:Destroy(); vehicleAlignOrientation = nil end
+    if vehicleAttachment       then vehicleAttachment:Destroy();       vehicleAttachment       = nil end
+    if vehicleAttachmentGyro   then vehicleAttachmentGyro:Destroy();   vehicleAttachmentGyro   = nil end
+end
+
+local function enableVehicleFly(seat)
+    if not seat or not seat:IsA("VehicleSeat") then return end
+    if not seat.Occupant or seat.Occupant.Parent ~= localPlayer.Character then return end
+
+    local vehiclePart = seat
+    if seat.Parent and seat.Parent:IsA("Model") and seat.Parent.PrimaryPart then
+        vehiclePart = seat.Parent.PrimaryPart
+    end
+
+    disableVehicleFly()
+
+    vehicleAttachment        = Instance.new("Attachment")
+    vehicleAttachment.Parent = vehiclePart
+
+    vehicleLinearVelocity                        = Instance.new("LinearVelocity")
+    vehicleLinearVelocity.Attachment0            = vehicleAttachment
+    vehicleLinearVelocity.MaxForce               = math.huge
+    vehicleLinearVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+    vehicleLinearVelocity.RelativeTo             = Enum.ActuatorRelativeTo.World
+    vehicleLinearVelocity.VectorVelocity         = Vector3.new(0, 0, 0)
+    vehicleLinearVelocity.Parent                 = vehiclePart
+
+    vehicleAttachmentGyro        = Instance.new("Attachment")
+    vehicleAttachmentGyro.Parent = vehiclePart
+
+    vehicleAlignOrientation                     = Instance.new("AlignOrientation")
+    vehicleAlignOrientation.Mode               = Enum.OrientationAlignmentMode.OneAttachment
+    vehicleAlignOrientation.Attachment0        = vehicleAttachmentGyro
+    vehicleAlignOrientation.MaxTorque          = math.huge
+    vehicleAlignOrientation.MaxAngularVelocity = math.huge
+    vehicleAlignOrientation.Responsiveness     = 200
+    vehicleAlignOrientation.RigidityEnabled    = false
+    vehicleAlignOrientation.Parent             = vehiclePart
+
+    currentVehicleSeat       = seat
+    -- Save originals before zeroing so they can be restored on disable
+    vehicleFlyOrigThrottle   = seat.ThrottleFloat
+    vehicleFlyOrigSteer      = seat.SteerFloat
+    seat.ThrottleFloat       = 0
+    seat.SteerFloat          = 0
+    currentVehicle           = vehiclePart
+    vehicleFlyActive         = true
+    syncUndergroundRecovery()
+
+    local moveConn
+    moveConn = RunService.Heartbeat:Connect(function()
+        if not vehicleFlyActive or not currentVehicle or not currentVehicle.Parent then
+            moveConn:Disconnect(); return
+        end
+
+        -- Re-create constraints if the server removed them
+        if not vehicleLinearVelocity   or not vehicleLinearVelocity.Parent
+        or not vehicleAlignOrientation or not vehicleAlignOrientation.Parent then
+            if currentVehicleSeat and currentVehicleSeat.Parent
+            and currentVehicleSeat.Occupant
+            and currentVehicleSeat.Occupant.Parent == localPlayer.Character then
+                enableVehicleFly(currentVehicleSeat)
+            end
+            return
+        end
+
+        if vehicleAlignOrientation then vehicleAlignOrientation.CFrame = camera.CFrame end
+        if currentVehicleSeat and currentVehicleSeat.Parent then
+            currentVehicleSeat.ThrottleFloat = 0
+            currentVehicleSeat.SteerFloat    = 0
+        end
+
+        local moveDir = Vector3.new()
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + camera.CFrame.LookVector  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - camera.CFrame.LookVector  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - camera.CFrame.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + camera.CFrame.RightVector end
+        -- Space excluded intentionally: triggers vehicle exit in Roblox.
+        -- Use camera pitch (shift-lock) to control altitude instead.
+
+        if moveDir.Magnitude > 0 then moveDir = moveDir.Unit end
+        moveDir = vehicleFlyGroundCheck(currentVehicle, moveDir)
+
+        if vehicleLinearVelocity then
+            vehicleLinearVelocity.VectorVelocity = moveDir * VEHICLE_FLY_SPEED
+        end
+    end)
+    table.insert(vehicleFlyConnections, moveConn)
+end
+
+function toggleVehicleFly(enable)
+    if enable then
+        local function setupSeatMonitoring()
+            local char = localPlayer.Character
+            if not char then return end
+            local humanoid = char:FindFirstChildWhichIsA("Humanoid")
+            if not humanoid then return end
+            if humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
+                enableVehicleFly(humanoid.SeatPart)
+            end
+            table.insert(vehicleMonitorConns,
+                humanoid:GetPropertyChangedSignal("SeatPart"):Connect(function()
+                    if humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
+                        enableVehicleFly(humanoid.SeatPart)
+                    else
+                        disableVehicleFly()
+                        syncUndergroundRecovery()
+                    end
+                end))
+            table.insert(vehicleMonitorConns,
+                localPlayer.CharacterAdded:Connect(function()
+                    for _, conn in ipairs(vehicleMonitorConns) do conn:Disconnect() end
+                    vehicleMonitorConns = {}
+                    disableVehicleFly()
+                    setupSeatMonitoring()
+                end))
+        end
+        setupSeatMonitoring()
+    else
+        disableVehicleFly()
+        for _, conn in ipairs(vehicleMonitorConns) do conn:Disconnect() end
+        vehicleMonitorConns = {}
+        syncUndergroundRecovery()
+    end
+end
+
+-- =====================================================================
+-- NO RECOIL  +  FAST FIRE  +  FAST RELOAD
+-- =====================================================================
+-- All three improvements share one toggle. Every change is purely local
+-- (camera CFrame, camera FOV, tool data values) — none of it replicates
+-- to the server or affects what other players see.
+--
+-- LAYER 1 — Camera recoil strip (RenderStepped, client-only)
+--   Each frame: compare actual camera pitch change to the expected pitch
+--   from mouse input. Any upward excess over the tolerance band is the
+--   game's recoil script moving the camera. Strip it by rewriting
+--   camera.CFrame before the GPU draws. Yaw is preserved exactly so
+--   horizontal aim is never disturbed. Invisible to other players.
+--
+-- LAYER 2 — FOV lock (RenderStepped, client-only)
+--   Captures FieldOfView at enable time and restores it every frame.
+--   Prevents games from briefly widening FOV on fire (visual "punch").
+--   NOTE: AnimationTrack speed is intentionally NOT touched here.
+--   Speeding up the character Animator catches walk/idle/run tracks and
+--   makes the character look like it's sprinting — visible locally and
+--   distracting. The camera layers already achieve the important goals.
+--
+-- LAYER 3 — Tool cooldown zeroing (on tool equip, data-only)
+--   When a Tool is equipped, scans it for NumberValue / IntValue
+--   descendants and tool Attributes whose names suggest a fire cooldown,
+--   reload delay, or debounce timer, and sets them to 0.
+--   This is a data write, not an animation change — other players see
+--   no visual difference. Original values are saved and restored on
+--   disable. Works with most Roblox FPS and combat game tool patterns.
+-- =====================================================================
+local NO_RECOIL_SENS_INITIAL  = 0.013
+local NO_RECOIL_CALIB_MIN_DELTA = 1.5
+local NO_RECOIL_CALIB_WARMUP    = 30
+local NO_RECOIL_CALIB_ALPHA     = 0.04
+-- Threshold below which pitch excess is sub-threshold (goes to accumulator).
+-- Lower = catches lighter recoil; 0.002 rad ≈ 0.11° per frame.
+local NO_RECOIL_THRESHOLD_RAD   = 0.002
+
+-- BoolValue names that act as fire/reload gates — forced to false so the
+-- weapon script's cooldown guard passes immediately.
+local NO_RECOIL_BOOL_KEYWORDS = {
+    "canfire","canshoot","canreload","isreloading","firing","reloading",
+    "debounce","cooldown","fireready","shootready","equipped","isready",
+    "waitingforreload","waitingforfire","onfirecd","onreloadcd",
+}
+local function isBoolGate(name)
+    local lower = name:lower()
+    for _, kw in ipairs(NO_RECOIL_BOOL_KEYWORDS) do
+        if lower:find(kw, 1, true) then return true end
+    end
+    return false
+end
+
+-- Reload animation keywords — tracks whose name contains these are
+-- advanced to near their end so the reload finishes almost instantly.
+local NO_RECOIL_RELOAD_ANIM_KW = {
+    "reload","reloading","refill","chamber","cock","bolt","mag",
+}
+local function isReloadAnimName(name)
+    local lower = name:lower()
+    for _, kw in ipairs(NO_RECOIL_RELOAD_ANIM_KW) do
+        if lower:find(kw, 1, true) then return true end
+    end
+    return false
+end
+
+local NO_RECOIL_COOLDOWN_KEYWORDS = {
+    -- fire timing
+    "cooldown","firerate","firedelay","reloadtime","reloadduration",
+    "debounce","firedebt","shotdelay","rate","delay","timer","wait",
+    "shootcooldown","attackcooldown","equipcooldown",
+    -- bullet spread / bloom — zeroing these keeps shots centred on crosshair
+    "spread","bloom","recoil","accuracy","scatter","dispersion",
+    "deviation","inaccuracy","bulletspread","aimspread","currentspread",
+    "currentbloom","spreadvalue","bloomvalue","spreadfactor","spreadangle",
+    "hipspread","adsbloom","walkspread","runspread","crouchspread",
+}
+
+-- Save obj[prop] once, then set it to newVal
+local function nrSaveAndSet(obj, prop, newVal)
+    for _, s in ipairs(noRecoilSavedValues) do
+        if s.obj == obj and s.prop == prop then
+            pcall(function() obj[prop] = newVal end)
+            return
+        end
+    end
+    local orig; local ok = pcall(function() orig = obj[prop] end)
+    if ok then
+        table.insert(noRecoilSavedValues, { obj = obj, prop = prop, orig = orig })
+        pcall(function() obj[prop] = newVal end)
+    end
+end
+
+-- Keywords that indicate spread/bloom — these need to be re-zeroed every
+-- frame because the game grows them back after each shot.
+local NO_RECOIL_SPREAD_KEYWORDS = {
+    "spread","bloom","recoil","accuracy","scatter","dispersion",
+    "deviation","inaccuracy","bulletspread","aimspread","currentspread",
+    "currentbloom","spreadvalue","bloomvalue","spreadfactor","spreadangle",
+    "hipspread","adsbloom","walkspread","runspread","crouchspread",
+}
+local function isSpreadKeyword(name)
+    local lower = name:lower()
+    for _, kw in ipairs(NO_RECOIL_SPREAD_KEYWORDS) do
+        if lower:find(kw, 1, true) then return true end
+    end
+    return false
+end
+local function isCooldownKeyword(name)
+    local lower = name:lower()
+    for _, kw in ipairs(NO_RECOIL_COOLDOWN_KEYWORDS) do
+        if lower:find(kw, 1, true) then return true end
+    end
+    return false
+end
+-- Add to the per-frame spread target list (no duplicates)
+local function nrAddSpreadTarget(entry)
+    for _, e in ipairs(noRecoilSpreadTargets) do
+        if e.obj == entry.obj and e.prop == entry.prop then return end
+    end
+    table.insert(noRecoilSpreadTargets, entry)
+end
+
+-- ── Physics-mover recoil cleanup ─────────────────────────────────────
+-- Some games apply recoil by inserting a BodyAngularVelocity, BodyGyro,
+-- or AngularVelocity into HumanoidRootPart. The camera follows the root,
+-- so these push the camera up without touching camera.CFrame directly.
+-- We destroy them the instant they appear.
+local NR_PHYSICS_MOVER_TYPES = {
+    "BodyAngularVelocity", "BodyGyro", "AngularVelocity", "BodyVelocity",
+}
+local function isRecoilPhysicsMover(obj)
+    for _, t in ipairs(NR_PHYSICS_MOVER_TYPES) do
+        if obj:IsA(t) then return true end
+    end
+    return false
+end
+
+-- Hook HumanoidRootPart so any physics recoil mover is destroyed instantly.
+-- Returns the connection so the caller can track/disconnect it.
+local function nrHookRootPart(rootPart)
+    if not rootPart then return nil end
+    -- Destroy any already-present movers
+    for _, child in ipairs(rootPart:GetChildren()) do
+        if isRecoilPhysicsMover(child) then pcall(function() child:Destroy() end) end
+    end
+    return rootPart.ChildAdded:Connect(function(child)
+        if not toggles.noRecoil then return end
+        if isRecoilPhysicsMover(child) then
+            pcall(function() child:Destroy() end)
+        end
+    end)
+end
+
+-- Zero cooldown / spread Values and Attributes on an equipped tool.
+-- • Spread Values are registered in noRecoilSpreadTargets for per-frame re-zero.
+-- • A DescendantAdded watcher catches Values added AFTER equip time (some games
+--   create bloom Values only when the first shot fires, not at equip).
+local function nrScanObject(obj)
+    -- NumberValue / IntValue: spread targets re-zeroed every frame; cooldowns zeroed once
+    if obj:IsA("NumberValue") or obj:IsA("IntValue") then
+        local name = obj.Name
+        if isSpreadKeyword(name) then
+            nrSaveAndSet(obj, "Value", 0)
+            nrAddSpreadTarget({ obj = obj, prop = "Value" })
+        elseif isCooldownKeyword(name) then
+            nrSaveAndSet(obj, "Value", 0)
+        end
+    -- BoolValue fire/reload gates: false = gate open = weapon fires/reloads without waiting
+    elseif obj:IsA("BoolValue") then
+        if isBoolGate(obj.Name) then
+            -- Infer correct forced value from name:
+            -- "can*"/"*ready"/"*ready*" = weapon fires when TRUE  → force true
+            -- "is*"/"*ing"/"debounce"  = weapon fires when FALSE → force false
+            local lower = obj.Name:lower()
+            local forceTrue = lower:find("^can") or lower:find("ready") or lower:find("equipped")
+            nrSaveAndSet(obj, "Value", forceTrue and true or false)
+            -- Also add to spread targets so it's re-forced every frame
+            -- (some games reset debounces mid-fire-loop)
+            nrAddSpreadTarget({ obj = obj, prop = "Value", boolForce = forceTrue and true or false })
+        end
+    end
+end
+
+-- Scan Attributes on a container AND on all of its descendants.
+-- Many games put fire settings in a Configuration object inside the tool;
+-- previously we only scanned the tool root's Attributes, missing those.
+local function nrScanAttributesDeep(container)
+    local function scanAttrs(obj)
+        pcall(function()
+            for attrName, attrVal in pairs(obj:GetAttributes()) do
+                if type(attrVal) == "number" then
+                    local isSpread   = isSpreadKeyword(attrName)
+                    local isCooldown = not isSpread and isCooldownKeyword(attrName)
+                    if not isSpread and not isCooldown then continue end
+                    local key = "_attr_" .. obj:GetFullName() .. "_" .. attrName
+                    local found = false
+                    for _, s in ipairs(noRecoilSavedValues) do
+                        if s.obj == obj and s.attrName == attrName then found = true; break end
+                    end
+                    if not found then
+                        table.insert(noRecoilSavedValues, {
+                            obj = obj, prop = key, orig = attrVal,
+                            isAttr = true, attrName = attrName,
+                        })
+                    end
+                    pcall(function() obj:SetAttribute(attrName, 0) end)
+                    if isSpread then
+                        nrAddSpreadTarget({ obj = obj, prop = key, isAttr = true, attrName = attrName })
+                    end
+                elseif type(attrVal) == "boolean" then
+                    if isBoolGate(attrName) then
+                        local lower = attrName:lower()
+                        local forceTrue = lower:find("^can") or lower:find("ready") or lower:find("equipped")
+                        local forced = forceTrue and true or false
+                        local key = "_attrb_" .. obj:GetFullName() .. "_" .. attrName
+                        local found = false
+                        for _, s in ipairs(noRecoilSavedValues) do
+                            if s.obj == obj and s.attrName == attrName then found = true; break end
+                        end
+                        if not found then
+                            table.insert(noRecoilSavedValues, {
+                                obj = obj, prop = key, orig = attrVal,
+                                isAttr = true, attrName = attrName,
+                            })
+                        end
+                        pcall(function() obj:SetAttribute(attrName, forced) end)
+                        nrAddSpreadTarget({ obj = obj, prop = key, isAttr = true,
+                            attrName = attrName, boolForce = forced })
+                    end
+                end
+            end
+        end)
+    end
+    scanAttrs(container)
+    for _, desc in ipairs(container:GetDescendants()) do scanAttrs(desc) end
+end
+
+-- Advance any currently-playing reload AnimationTrack on the character
+-- to near its end so the reload completes in the next frame or two.
+local function nrSkipReloadAnims(char)
+    if not char then return end
+    local animator = char:FindFirstChildWhichIsA("Animator", true)
+    if not animator then return end
+    pcall(function()
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            if isReloadAnimName(track.Name) then
+                -- Jump to 95% of the animation length so the end event fires
+                track.TimePosition = track.Length * 0.95
+            end
+        end
+    end)
+end
+
+local function nrApplyToTool(tool)
+    if not tool or not tool:IsA("Tool") then return end
+
+    -- Scan all current descendants (Values + BoolValues)
+    for _, desc in ipairs(tool:GetDescendants()) do nrScanObject(desc) end
+    -- Deep Attribute scan: tool root + every descendant's Attributes
+    nrScanAttributesDeep(tool)
+
+    -- Watch for Values / BoolValues added AFTER equip
+    local descConn = tool.DescendantAdded:Connect(function(desc)
+        if not toggles.noRecoil then return end
+        nrScanObject(desc)
+        -- If a Configuration was just added, deep-scan its attributes too
+        if desc:IsA("Configuration") or desc:IsA("Folder") then
+            nrScanAttributesDeep(desc)
+        end
+    end)
+    table.insert(noRecoilToolConns, descConn)
+
+    -- On every fire/activate: skip any in-progress reload animations
+    local activateConn = tool.Activated:Connect(function()
+        if not toggles.noRecoil then return end
+        local char = localPlayer.Character
+        if char then nrSkipReloadAnims(char) end
+    end)
+    table.insert(noRecoilToolConns, activateConn)
+end
+
+-- Scan the character itself for spread/bloom Values (some games put them
+-- on the character, not the tool, so they persist across weapon swaps).
+local function nrScanCharacter(char)
+    if not char then return end
+    for _, desc in ipairs(char:GetDescendants()) do
+        if desc:IsA("NumberValue") or desc:IsA("IntValue") then
+            if isSpreadKeyword(desc.Name) then
+                nrSaveAndSet(desc, "Value", 0)
+                nrAddSpreadTarget({ obj = desc, prop = "Value" })
+            end
+        end
+    end
+    -- Watch for dynamically-added character Values
+    local charDescConn = char.DescendantAdded:Connect(function(desc)
+        if not toggles.noRecoil then return end
+        if (desc:IsA("NumberValue") or desc:IsA("IntValue"))
+            and isSpreadKeyword(desc.Name) then
+            nrSaveAndSet(desc, "Value", 0)
+            nrAddSpreadTarget({ obj = desc, prop = "Value" })
+        end
+    end)
+    table.insert(noRecoilCharConns, charDescConn)
+    -- Hook RootPart for physics-mover recoil
+    local rootPart = char:FindFirstChild("HumanoidRootPart")
+    if rootPart then
+        local rootConn = nrHookRootPart(rootPart)
+        if rootConn then table.insert(noRecoilCharConns, rootConn) end
+    else
+        -- RootPart may not exist yet — wait for it
+        local waitConn
+        waitConn = char.ChildAdded:Connect(function(child)
+            if child.Name == "HumanoidRootPart" then
+                waitConn:Disconnect()
+                local rootConn = nrHookRootPart(child)
+                if rootConn then table.insert(noRecoilCharConns, rootConn) end
+            end
+        end)
+        table.insert(noRecoilCharConns, waitConn)
+    end
+end
+
+function toggleNoRecoil(enable)
+    if enable then
+        noRecoilPrevCF        = camera.CFrame
+        noRecoilDriftAccum    = 0
+        noRecoilSensLive      = NO_RECOIL_SENS_INITIAL
+        noRecoilCalibSamples  = 0
+
+        -- Set up all character-level scanning and physics-mover hooks
+        local char = localPlayer.Character
+        if char then
+            -- Scan character-level spread Values + hook RootPart physics movers
+            nrScanCharacter(char)
+            -- Scan and watch tools already equipped
+            for _, child in ipairs(char:GetChildren()) do
+                if child:IsA("Tool") then nrApplyToTool(child) end
+            end
+            local toolConn = char.ChildAdded:Connect(function(child)
+                if not toggles.noRecoil then return end
+                if child:IsA("Tool") then nrApplyToTool(child) end
+            end)
+            table.insert(noRecoilToolConns, toolConn)
+        end
+
+        -- Re-apply everything after every respawn
+        local respawnConn = localPlayer.CharacterAdded:Connect(function(newChar)
+            if not toggles.noRecoil then return end
+            -- Clear char-level connections from previous life
+            for _, c in ipairs(noRecoilCharConns) do c:Disconnect() end
+            noRecoilCharConns = {}
+            -- Purge stale spread targets whose objects no longer exist
+            local live = {}
+            for _, t in ipairs(noRecoilSpreadTargets) do
+                if t.obj and t.obj.Parent then live[#live+1] = t end
+            end
+            noRecoilSpreadTargets = live
+
+            task.wait(0.1)  -- brief wait for new character to fully load
+            if not toggles.noRecoil then return end
+            noRecoilPrevCF       = camera.CFrame
+            noRecoilDriftAccum   = 0
+            noRecoilSensLive     = NO_RECOIL_SENS_INITIAL
+            noRecoilCalibSamples = 0
+            nrScanCharacter(newChar)
+            for _, child in ipairs(newChar:GetChildren()) do
+                if child:IsA("Tool") then nrApplyToTool(child) end
+            end
+            local toolConn = newChar.ChildAdded:Connect(function(child)
+                if not toggles.noRecoil then return end
+                if child:IsA("Tool") then nrApplyToTool(child) end
+            end)
+            table.insert(noRecoilToolConns, toolConn)
+        end)
+        table.insert(noRecoilToolConns, respawnConn)
+
+        -- ── Per-frame camera work ─────────────────────────────────────
+        -- Camera+1 priority = runs after every game recoil script.
+        RunService:BindToRenderStep("NR_noRecoil", Enum.RenderPriority.Camera.Value + 1,
+        function()
+            if not toggles.noRecoil then return end
+
+            local current    = camera.CFrame
+            local mouseDelta = UserInputService:GetMouseDelta()
+            -- Detect if the player is actively firing (mouse button 1 held)
+            local isFiring   = UserInputService:IsMouseButtonPressed(
+                                   Enum.UserInputType.MouseButton1)
+
+            if noRecoilPrevCF then
+                local prevPitch   = math.asin(math.clamp(noRecoilPrevCF.LookVector.Y, -1, 1))
+                local actualPitch = math.asin(math.clamp(current.LookVector.Y,        -1, 1))
+                local pitchDelta  = actualPitch - prevPitch
+
+                -- ── Sensitivity self-calibration ─────────────────────
+                -- CRITICAL: only calibrate when NOT firing. During firing,
+                -- pitchDelta includes recoil — using those frames inflates
+                -- the sensitivity estimate and causes under-correction.
+                -- We only trust frames where the player is purely looking around.
+                if not isFiring then
+                    local absMouseY = math.abs(mouseDelta.Y)
+                    if absMouseY >= NO_RECOIL_CALIB_MIN_DELTA then
+                        local measuredSens = -pitchDelta / mouseDelta.Y
+                        if measuredSens > 0.001 and measuredSens < 0.08 then
+                            if noRecoilCalibSamples < NO_RECOIL_CALIB_WARMUP then
+                                noRecoilSensLive    = (noRecoilSensLive * noRecoilCalibSamples
+                                                      + measuredSens) / (noRecoilCalibSamples + 1)
+                                noRecoilCalibSamples = noRecoilCalibSamples + 1
+                            else
+                                noRecoilSensLive = noRecoilSensLive * (1 - NO_RECOIL_CALIB_ALPHA)
+                                                 + measuredSens      * NO_RECOIL_CALIB_ALPHA
+                            end
+                        end
+                    end
+                end
+
+                -- ── Pitch correction ──────────────────────────────────
+                -- Only correct when firing — no recoil possible otherwise.
+                if isFiring then
+                    local expectedPitch = -mouseDelta.Y * noRecoilSensLive
+                    local pitchExcess   = pitchDelta - expectedPitch
+                    pitchExcess = math.clamp(pitchExcess, 0, 0.15)
+
+                    if pitchExcess > NO_RECOIL_THRESHOLD_RAD then
+                        noRecoilDriftAccum = 0
+                        local corrected = CFrame.new(current.Position)
+                            * CFrame.fromAxisAngle(current.RightVector, -pitchExcess)
+                            * current.Rotation
+                        camera.CFrame = corrected
+                        current = corrected
+                    elseif pitchExcess > 0 then
+                        noRecoilDriftAccum = noRecoilDriftAccum + pitchExcess
+                        if noRecoilDriftAccum > NO_RECOIL_THRESHOLD_RAD then
+                            local correction   = noRecoilDriftAccum
+                            noRecoilDriftAccum = 0
+                            local corrected = CFrame.new(current.Position)
+                                * CFrame.fromAxisAngle(current.RightVector, -correction)
+                                * current.Rotation
+                            camera.CFrame = corrected
+                            current = corrected
+                        end
+                    else
+                        noRecoilDriftAccum = math.max(0, noRecoilDriftAccum - 0.0008)
+                    end
+                else
+                    -- Not firing — decay accumulator so sub-threshold
+                    -- residue doesn't snap camera on next trigger press.
+                    noRecoilDriftAccum = math.max(0, noRecoilDriftAccum - 0.002)
+                end
+            end
+            noRecoilPrevCF = current
+
+            -- ── Spread/bloom + BoolValue gate re-force ────────────────
+            -- NumberValue/IntValue spread = keep at 0 (grows back each frame)
+            -- BoolValue gates = keep forced (games reset debounces mid-loop)
+            if #noRecoilSpreadTargets > 0 then
+                for _, t in ipairs(noRecoilSpreadTargets) do
+                    if t.obj and t.obj.Parent then
+                        if t.boolForce ~= nil then
+                            -- BoolValue gate: re-force its state every frame
+                            pcall(function()
+                                if t.isAttr then
+                                    t.obj:SetAttribute(t.attrName, t.boolForce)
+                                else
+                                    if t.obj.Value ~= t.boolForce then
+                                        t.obj.Value = t.boolForce
+                                    end
+                                end
+                            end)
+                        elseif t.isAttr then
+                            pcall(function() t.obj:SetAttribute(t.attrName, 0) end)
+                        else
+                            pcall(function()
+                                if t.obj[t.prop] ~= 0 then t.obj[t.prop] = 0 end
+                            end)
+                        end
+                    end
+                end
+            end
+        end)
+        noRecoilBound = true
+
+    else
+        -- Unbind the render step callback
+        if noRecoilBound then
+            pcall(function() RunService:UnbindFromRenderStep("NR_noRecoil") end)
+            noRecoilBound = false
+        end
+        noRecoilPrevCF       = nil
+        noRecoilDriftAccum   = 0
+        noRecoilSensLive     = NO_RECOIL_SENS_INITIAL
+        noRecoilCalibSamples = 0
+
+        -- Disconnect tool/respawn watchers
+        for _, c in ipairs(noRecoilToolConns) do c:Disconnect() end
+        noRecoilToolConns = {}
+        -- Disconnect character-level watchers
+        for _, c in ipairs(noRecoilCharConns) do c:Disconnect() end
+        noRecoilCharConns = {}
+        noRecoilSpreadTargets = {}
+
+        -- Restore all saved tool Values and Attributes
+        for _, s in ipairs(noRecoilSavedValues) do
+            if s.obj and s.obj.Parent then
+                if s.isAttr then
+                    pcall(function() s.obj:SetAttribute(s.attrName, s.orig) end)
+                else
+                    pcall(function() s.obj[s.prop] = s.orig end)
+                end
+            end
+        end
+        noRecoilSavedValues = {}
+    end
+end
+
+-- =====================================================================
+-- UI
+-- =====================================================================
+local function createButton(parent, size, pos, bgColor, text, textColor, cornerRadius)
+    local btn = Instance.new("TextButton")
+    btn.Size             = size
+    if pos then btn.Position = pos end
+    btn.BackgroundColor3 = bgColor
+    btn.Text             = text
+    btn.TextColor3       = textColor
+    btn.Font             = Enum.Font.Gotham
+    btn.TextSize         = 13
+    btn.BorderSizePixel  = 0
+    btn.Parent           = parent
+    local corner        = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, cornerRadius or 6)
+    corner.Parent       = btn
+    return btn
+end
+
+local function createMainPanel()
+    mainFrame = Instance.new("Frame")
+    mainFrame.Name                   = "MainFrame"
+    mainFrame.Size                   = UDim2.new(0, 300, 0, 370)
+    mainFrame.Position               = UDim2.new(0.5, -150, 0.5, -185)
+    mainFrame.BackgroundColor3       = Color3.fromRGB(22, 22, 28)
+    mainFrame.BackgroundTransparency = 0
+    mainFrame.BorderSizePixel        = 0
+    mainFrame.Active                 = true
+    mainFrame.Draggable              = true
+    mainFrame.Visible                = true
+    mainFrame.Parent                 = screenGui
+    local mainCorner = Instance.new("UICorner")
+    mainCorner.CornerRadius = UDim.new(0, 8)
+    mainCorner.Parent       = mainFrame
+    return mainFrame
+end
+
+local function createTitleBar()
+    local titleBar = Instance.new("Frame")
+    titleBar.Name             = "TitleBar"
+    titleBar.Size             = UDim2.new(1, 0, 0, 32)
+    titleBar.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+    titleBar.BorderSizePixel  = 0
+    titleBar.Parent           = mainFrame
+
+    local titleCorner = Instance.new("UICorner")
+    titleCorner.CornerRadius = UDim.new(0, 8)
+    titleCorner.Parent       = titleBar
+
+    local titleFix = Instance.new("Frame")
+    titleFix.Size             = UDim2.new(1, 0, 0, 8)
+    titleFix.Position         = UDim2.new(0, 0, 1, -8)
+    titleFix.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+    titleFix.BorderSizePixel  = 0
+    titleFix.Parent           = titleBar
+
+    local titleText = Instance.new("TextLabel")
+    titleText.Size                   = UDim2.new(1, -70, 1, 0)
+    titleText.Position               = UDim2.new(0, 10, 0, 0)
+    titleText.BackgroundTransparency = 1
+    titleText.Text                   = "Universal Script"
+    titleText.TextColor3             = Color3.fromRGB(220, 220, 220)
+    titleText.TextXAlignment         = Enum.TextXAlignment.Left
+    titleText.Font                   = Enum.Font.GothamBold
+    titleText.TextSize               = 14
+    titleText.Parent                 = titleBar
+
+    minimizeButton = createButton(titleBar, UDim2.new(0,28,0,22), UDim2.new(1,-62,0.5,-11),
+        Color3.fromRGB(60,60,70), "—", Color3.fromRGB(200,200,200), 4)
+    closeButton = createButton(titleBar, UDim2.new(0,28,0,22), UDim2.new(1,-30,0.5,-11),
+        Color3.fromRGB(190,50,50), "✕", Color3.new(1,1,1), 4)
+end
+
+local function createContentArea()
+    local content = Instance.new("ScrollingFrame")
+    content.Name                   = "Content"
+    content.Size                   = UDim2.new(1,-12,1,-44)
+    content.Position               = UDim2.new(0,6,0,38)
+    content.BackgroundTransparency = 1
+    content.BorderSizePixel        = 0
+    content.ScrollBarThickness     = 4
+    content.ScrollBarImageColor3   = Color3.fromRGB(80,80,100)
+    content.CanvasSize             = UDim2.new(0,0,0,0)
+    content.AutomaticCanvasSize    = Enum.AutomaticSize.Y
+    content.Parent                 = mainFrame
+
+    local listLayout = Instance.new("UIListLayout")
+    listLayout.Padding   = UDim.new(0,4)
+    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    listLayout.Parent    = content
+
+    local contentPad = Instance.new("UIPadding")
+    contentPad.PaddingTop    = UDim.new(0,4)
+    contentPad.PaddingBottom = UDim.new(0,4)
+    contentPad.Parent        = content
+
+    return content
+end
+
+local function createRestoreButton()
+    restoreButton = Instance.new("TextButton")
+    restoreButton.Name                   = "RestoreButton"
+    restoreButton.Size                   = UDim2.new(0,140,0,32)
+    restoreButton.Position               = restoreButtonPos
+    restoreButton.BackgroundColor3       = Color3.fromRGB(22,22,28)
+    restoreButton.BackgroundTransparency = 0
+    restoreButton.Text                   = "☰  Universal Script"
+    restoreButton.TextColor3             = Color3.fromRGB(200,200,200)
+    restoreButton.Font                   = Enum.Font.GothamBold
+    restoreButton.TextSize               = 13
+    restoreButton.Visible                = false
+    restoreButton.BorderSizePixel        = 0
+    restoreButton.ZIndex                 = 10
+    restoreButton.Parent                 = screenGui
+    local restoreCorner = Instance.new("UICorner")
+    restoreCorner.CornerRadius = UDim.new(0,16)
+    restoreCorner.Parent       = restoreButton
+
+    restoreButton.InputBegan:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch then return end
+
+        local startInputPos = Vector2.new(input.Position.X, input.Position.Y)
+        local startAbsPos   = restoreButton.AbsolutePosition
+        local moved         = false
+        local movedConn, endedConn
+
+        movedConn = UserInputService.InputChanged:Connect(function(changed)
+            if changed.UserInputType ~= Enum.UserInputType.MouseMovement
+                and changed.UserInputType ~= Enum.UserInputType.Touch then return end
+            local delta = Vector2.new(changed.Position.X, changed.Position.Y) - startInputPos
+            if delta.Magnitude > 5 then moved = true end
+            local newX = math.clamp(startAbsPos.X + delta.X, 0, screenGui.AbsoluteSize.X - restoreButton.AbsoluteSize.X)
+            local newY = math.clamp(startAbsPos.Y + delta.Y, 0, screenGui.AbsoluteSize.Y - restoreButton.AbsoluteSize.Y)
+            restoreButton.Position = UDim2.new(0, newX, 0, newY)
+        end)
+
+        endedConn = UserInputService.InputEnded:Connect(function(ended)
+            if ended ~= input then return end
+            movedConn:Disconnect()
+            endedConn:Disconnect()
+            restoreButtonPos = restoreButton.Position
+            if not moved and isMinimized then
+                mainFrame.Position    = UDim2.new(0.5,-150,0.5,-185)
+                mainFrame.Visible     = true
+                restoreButton.Visible = false
+                isMinimized           = false
+                guiVisible            = true
+            end
+        end)
+    end)
+end
+
+local function createToggleButtons(content)
+    local order = 0
+    local function createToggle(name, toggleVar, callback)
+        order = order + 1
+        local btn = Instance.new("TextButton")
+        btn.Name             = toggleVar
+        btn.Size             = UDim2.new(1,0,0,32)
+        btn.BackgroundColor3 = Color3.fromRGB(38,38,48)
+        btn.Text             = name .. "  ●  OFF"
+        btn.TextColor3       = Color3.fromRGB(160,160,170)
+        btn.Font             = Enum.Font.Gotham
+        btn.TextSize         = 13
+        btn.BorderSizePixel  = 0
+        btn.LayoutOrder      = order
+        btn.Parent           = content
+        local btnCorner = Instance.new("UICorner")
+        btnCorner.CornerRadius = UDim.new(0,6)
+        btnCorner.Parent       = btn
+
+        buttonRefs[toggleVar] = btn
+
+        btn.MouseButton1Click:Connect(function()
+            toggles[toggleVar]   = not toggles[toggleVar]
+            local on = toggles[toggleVar]
+            btn.Text             = name .. (on and "  ●  ON" or "  ●  OFF")
+            btn.TextColor3       = on and Color3.fromRGB(100,220,120) or Color3.fromRGB(160,160,170)
+            btn.BackgroundColor3 = on and Color3.fromRGB(28,52,34)    or Color3.fromRGB(38,38,48)
+            callback(on)
+        end)
+    end
+
+    createToggle("Players ESP",    "playersESP",   togglePlayersESP)
+    createToggle("Items ESP",      "itemsESP",     toggleItemsESP)
+    createToggle("NPCs ESP",       "npcESP",       toggleNPCsESP)
+    createToggle("Held Items ESP", "heldItemsESP", toggleHeldItemsESP)
+    createToggle("Fullbright",     "fullbright",   toggleFullbright)
+    createToggle("Noclip",         "noclip",       toggleNoclip)
+    createToggle("TP Tool",        "tpTool",       toggleTPTool)
+    createToggle("FPS Boost",      "fpsBoost",     toggleFPSBoost)
+    createToggle("WalkSpeed",      "walkspeed",    toggleWalkspeed)
+    createToggle("Fly",            "fly",          toggleFly)
+    createToggle("Vehicle Speed",  "vehiclespeed", toggleVehiclespeed)
+    createToggle("Vehicle Fly",    "vehicleFly",   toggleVehicleFly)
+    createToggle("No Recoil",      "noRecoil",     toggleNoRecoil)
+
+    -- Rejoin button
+    order = order + 1
+    local rejoinBtn = Instance.new("TextButton")
+    rejoinBtn.Name             = "RejoinBtn"
+    rejoinBtn.Size             = UDim2.new(1,0,0,32)
+    rejoinBtn.BackgroundColor3 = Color3.fromRGB(40,60,110)
+    rejoinBtn.Text             = "Rejoin  (Same Server)"
+    rejoinBtn.TextColor3       = Color3.fromRGB(180,200,255)
+    rejoinBtn.Font             = Enum.Font.GothamBold
+    rejoinBtn.TextSize         = 13
+    rejoinBtn.BorderSizePixel  = 0
+    rejoinBtn.LayoutOrder      = order
+    rejoinBtn.Parent           = content
+    local rejoinCorner = Instance.new("UICorner")
+    rejoinCorner.CornerRadius = UDim.new(0,6)
+    rejoinCorner.Parent       = rejoinBtn
+
+    rejoinBtn.MouseButton1Click:Connect(function()
+        local ok, err = pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, localPlayer)
+        end)
+        if not ok then
+            warn("Rejoin same server failed, falling back: " .. tostring(err))
+            TeleportService:Teleport(game.PlaceId, localPlayer)
+        end
+    end)
+
+    -- Hotkey hint
+    order = order + 1
+    local hintLabel = Instance.new("TextLabel")
+    hintLabel.Size                   = UDim2.new(1,0,0,20)
+    hintLabel.BackgroundTransparency = 1
+    hintLabel.Text                   = "Insert / RightCtrl  –  toggle GUI"
+    hintLabel.TextColor3             = Color3.fromRGB(80,80,95)
+    hintLabel.Font                   = Enum.Font.Gotham
+    hintLabel.TextSize               = 11
+    hintLabel.LayoutOrder            = order
+    hintLabel.Parent                 = content
+end
+
+local function setupUIEvents()
+    minimizeButton.MouseButton1Click:Connect(function()
+        restoreButton.Position = restoreButtonPos
+        restoreButton.Visible  = true
+        mainFrame.Visible      = false
+        isMinimized            = true
+    end)
+
+    local closePending = false
+    closeButton.MouseButton1Click:Connect(function()
+        if closePending then
+            cleanupAll()
+        else
+            closePending = true
+            closeButton.BackgroundColor3 = Color3.fromRGB(230,100,100)
+            task.wait(2)
+            closePending = false
+            closeButton.BackgroundColor3 = Color3.fromRGB(190,50,50)
+        end
+    end)
+
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        local isHotkey = (input.KeyCode == Enum.KeyCode.Insert)
+            or (input.KeyCode == Enum.KeyCode.RightControl and not gameProcessed)
+        if not isHotkey then return end
+        if isMinimized then
+            restoreButton.Visible = false
+            mainFrame.Visible     = true
+            isMinimized           = false
+            guiVisible            = true
+        else
+            guiVisible        = not guiVisible
+            mainFrame.Visible = guiVisible
+        end
+    end)
+end
+
+function createUI()
+    createMainPanel()
+    createTitleBar()
+    local content = createContentArea()
+    createRestoreButton()
+    createToggleButtons(content)
+    setupUIEvents()
+end
+
+-- =====================================================================
+-- CLEANUP
+-- =====================================================================
+function cleanupAll()
+    stopGlobalDistanceUpdater()
+    stopUndergroundRecovery()
+
+    -- ESP
+    local toDestroy = {}
+    for inst in pairs(espInstances) do toDestroy[#toDestroy+1] = inst end
+    for _, inst in ipairs(toDestroy) do destroyESPInstance(inst) end
+    espInstances = {}
+
+    for _, typeConns in pairs(espTypeConnections) do
+        for _, conn in ipairs(typeConns) do conn:Disconnect() end
+    end
+    espTypeConnections = { players={}, items={}, npcs={}, helditems={} }
+
+    local toUntrackPlayers = {}
+    for player in pairs(playerTrackers) do toUntrackPlayers[#toUntrackPlayers+1] = player end
+    for _, player in ipairs(toUntrackPlayers) do untrackPlayer(player) end
+
+    local toUntrackHeld = {}
+    for player in pairs(heldItemTrackers) do toUntrackHeld[#toUntrackHeld+1] = player end
+    for _, player in ipairs(toUntrackHeld) do untrackPlayerHeldItems(player) end
+
+    playerTrackers   = {}
+    heldItemTrackers = {}
+
+    -- Noclip
+    if noclipHeartbeat then noclipHeartbeat:Disconnect(); noclipHeartbeat = nil end
+    for _, conn in ipairs(noclipConnections) do conn:Disconnect() end
+    noclipConnections = {}
+    for part, original in pairs(noclipOriginalStates) do
+        if part and part.Parent then part.CanCollide = original end
+    end
+    noclipOriginalStates = setmetatable({}, { __mode = "k" })
+
+    -- Fly
+    flyActive = false
+    for _, conn in ipairs(flyConnections) do conn:Disconnect() end
+    flyConnections = {}
+    if flyLinearVelocity   then flyLinearVelocity:Destroy();   flyLinearVelocity   = nil end
+    if flyAlignOrientation then flyAlignOrientation:Destroy(); flyAlignOrientation = nil end
+    if flyAttachment       then flyAttachment:Destroy();       flyAttachment       = nil end
+    if flyAttachmentGyro   then flyAttachmentGyro:Destroy();   flyAttachmentGyro   = nil end
+    do
+        local char = localPlayer.Character
+        if char then
+            local h = char:FindFirstChild("Humanoid")
+            if h then
+                h.PlatformStand = flyOrigPlatformStand ~= nil and flyOrigPlatformStand or false
+            end
+        end
+        flyOrigPlatformStand = nil
+    end
+
+    -- TP Tool
+    if toggles.tpToolObject then toggles.tpToolObject:Destroy(); toggles.tpToolObject = nil end
+
+    -- Vehicle Fly
+    disableVehicleFly()
+    for _, conn in ipairs(vehicleMonitorConns) do conn:Disconnect() end
+    vehicleMonitorConns = {}
+
+    -- Vehicle Speed
+    disableVehicleSpeed()
+    for _, conn in ipairs(vehiclespeedConnections) do conn:Disconnect() end
+    vehiclespeedConnections = {}
+
+    -- WalkSpeed
+    -- Disconnect ALL watchers (heartbeat + property-changed) BEFORE restoring
+    -- WalkSpeed. If property-changed connections are still live when we write
+    -- the original value back, they fire, see WalkSpeed ≠ WALK_SPEED, and
+    -- re-apply WALK_SPEED — overwriting the restored original.
+    if walkspeedHeartbeat then walkspeedHeartbeat:Disconnect(); walkspeedHeartbeat = nil end
+    for _, conn in ipairs(walkspeedConnections) do conn:Disconnect() end
+    walkspeedConnections = {}
+    for humanoid, original in pairs(walkspeedOriginalValues) do
+        if humanoid and humanoid.Parent then humanoid.WalkSpeed = original end
+    end
+    walkspeedOriginalValues = setmetatable({}, { __mode = "k" })
+
+    -- Restore render quality if it was changed by FPS Boost
+    if fpsBoostProperties.QualityLevel ~= nil then
+        pcall(function()
+            settings().Rendering.QualityLevel = fpsBoostProperties.QualityLevel
+        end)
+        fpsBoostProperties.QualityLevel = nil
+    end
+
+    -- Restore all lighting (includes Brightness)
+    if originalLightingProperties then
+        for prop, val in pairs(originalLightingProperties) do
+            pcall(function() Lighting[prop] = val end)
+        end
+        originalLightingProperties = nil
+    end
+
+    -- FPS Boost terrain
+    if fpsBoostProperties.Terrain then
+        Workspace.Terrain.WaterWaveSize     = fpsBoostProperties.Terrain.WaterWaveSize
+        Workspace.Terrain.WaterWaveSpeed    = fpsBoostProperties.Terrain.WaterWaveSpeed
+        Workspace.Terrain.WaterReflectance  = fpsBoostProperties.Terrain.WaterReflectance
+        Workspace.Terrain.WaterTransparency = fpsBoostProperties.Terrain.WaterTransparency
+    end
+    fpsBoostProperties = {}
+
+    -- FPS Boost per-instance restore
+    restoreFPSBoostData()
+
+    -- No Recoil / Fast Fire / Fast Reload
+    if noRecoilBound then
+        pcall(function() RunService:UnbindFromRenderStep("NR_noRecoil") end)
+        noRecoilBound = false
+    end
+    noRecoilPrevCF       = nil
+    noRecoilDriftAccum   = 0
+    noRecoilSensLive     = NO_RECOIL_SENS_INITIAL
+    noRecoilCalibSamples = 0
+    for _, c in ipairs(noRecoilToolConns) do c:Disconnect() end
+    noRecoilToolConns = {}
+    for _, c in ipairs(noRecoilCharConns) do c:Disconnect() end
+    noRecoilCharConns   = {}
+    noRecoilSpreadTargets = {}
+    for _, s in ipairs(noRecoilSavedValues) do
+        if s.obj and s.obj.Parent then
+            if s.isAttr then
+                pcall(function() s.obj:SetAttribute(s.attrName, s.orig) end)
+            else
+                pcall(function() s.obj[s.prop] = s.orig end)
+            end
+        end
+    end
+    noRecoilSavedValues = {}
+
+    for k in pairs(toggles) do
+        if k ~= "tpToolObject" then toggles[k] = false end
+    end
+
+    if screenGui and screenGui.Parent then screenGui:Destroy() end
+    _G.UniversalScript = nil
+end
+
+-- =====================================================================
+-- LIFECYCLE HOOKS
+-- =====================================================================
+_G.UniversalScript = { cleanup = cleanupAll }
+
+pcall(function()
+    localPlayer.OnTeleport:Connect(function(teleportState)
+        if teleportState == Enum.TeleportState.Started then cleanupAll() end
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+    if plr == localPlayer then cleanupAll() end
+end)
+
+createUI()

@@ -1,6 +1,8 @@
 -- Universal Roblox Script
 -- ESP (Players/Items/NPCs/HeldItems), Fullbright, Noclip, TP Tool, FPS Boost, Rejoin,
 -- Fly, Vehicle Fly, WalkSpeed, Vehicle Speed, No Recoil
+-- Can't load this script because it's too long?
+-- Try this: loadstring(game:HttpGet("https://raw.githubusercontent.com/Hakame-kun/Scripts/refs/heads/main/Open%20Source/Universal%20Roblox%20Script.txt", true))()
 
 -- ============================================================
 

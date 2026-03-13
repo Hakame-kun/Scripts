@@ -900,7 +900,7 @@ local defaults; do
         return obj
     end
 
-    defaults = {"default =", now "defaults ="
+    defaults = {
         topcolor         = Color3.fromRGB(30, 30, 30);
         titlecolor       = Color3.fromRGB(255, 255, 255);
         underlinecolor   = Color3.fromRGB(0, 255, 140);
